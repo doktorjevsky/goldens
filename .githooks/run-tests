@@ -1,0 +1,19 @@
+#!/bin/sh
+set -eu
+
+repo_root=$(git rev-parse --show-toplevel)
+cd "$repo_root"
+
+if command -v cmd.exe >/dev/null 2>&1; then
+    # Git Bash otherwise rewrites cmd.exe switches such as /d into POSIX paths.
+    export MSYS2_ARG_CONV_EXCL='*'
+    exec cmd.exe /d /c test.bat
+fi
+
+if command -v ssh >/dev/null 2>&1; then
+    echo "Running the Goldens Windows suite on win-vm..."
+    exec ssh win-vm 'powershell -NoProfile -Command "Set-Location $HOME\dev\goldens; .\test.bat; exit $LASTEXITCODE"'
+fi
+
+echo "Goldens tests require Windows or an SSH host named win-vm." >&2
+exit 1
