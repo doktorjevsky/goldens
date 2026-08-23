@@ -108,6 +108,7 @@ static GoldenImage g_preview_image;
 static HWND g_preview_target;
 static wchar_t g_preview_title[256];
 static BOOL g_preview_mode;
+static BOOL g_resource_visible;
 static BOOL g_preview_loading;
 static LONG g_preview_generation;
 static double g_zoom;
@@ -206,7 +207,7 @@ static void update_context_label(void) {
     if (g_preview_mode)
         _snwprintf(text, _countof(text), L"  Previewing window  —  %s",
                    g_preview_title[0] ? g_preview_title : L"Untitled window");
-    else if (g_image_path[0])
+    else if (g_resource_visible && g_image_path[0])
         _snwprintf(text, _countof(text), L"  Editing resource  —  %s",
                    PathFindFileNameW(g_image_path));
     else
@@ -376,6 +377,7 @@ static void clear_image(void) {
     free(g_pixels);
     g_pixels = NULL;
     g_image_w = g_image_h = g_stride = 0;
+    g_resource_visible = FALSE;
 }
 
 static void clear_preview(void) {
@@ -391,9 +393,15 @@ static void clear_preview(void) {
     update_tool_availability();
 }
 
-static BYTE *active_pixels(void) { return g_preview_mode ? g_preview_image.pixels : g_pixels; }
-static UINT active_width(void) { return g_preview_mode ? g_preview_image.width : g_image_w; }
-static UINT active_height(void) { return g_preview_mode ? g_preview_image.height : g_image_h; }
+static BYTE *active_pixels(void) {
+    return g_preview_mode ? g_preview_image.pixels : g_resource_visible ? g_pixels : NULL;
+}
+static UINT active_width(void) {
+    return g_preview_mode ? g_preview_image.width : g_resource_visible ? g_image_w : 0;
+}
+static UINT active_height(void) {
+    return g_preview_mode ? g_preview_image.height : g_resource_visible ? g_image_h : 0;
+}
 
 static BOOL load_png(const wchar_t *path) {
     GoldenImage image = {0};
@@ -738,6 +746,7 @@ static BOOL load_resource(const wchar_t *path) {
     if (!maybe_save()) return FALSE;
     if (!load_png(path)) { show_error(L"Could not decode the selected PNG file."); return FALSE; }
     clear_preview();
+    g_resource_visible = TRUE;
     g_zoom = 0.0;
     g_pan_x = g_pan_y = 0;
     wcsncpy(g_image_path, path, _countof(g_image_path) - 1);
@@ -1207,6 +1216,37 @@ static ResourceTreeNode *clicked_resource_node(void) {
     return tree_node_data(hit.hItem);
 }
 
+static ResourceTreeNode *selected_active_resource_node(void) {
+    ResourceTreeNode *node = tree_node_data(TreeView_GetSelection(g_tree));
+    if (!node) return NULL;
+    if (node->kind == RESOURCE_PNG)
+        return node->path && !_wcsicmp(node->path, g_image_path) ? node : NULL;
+    if (node->kind == RESOURCE_ANNOTATION && node->annotation_index >= 0 &&
+        node->annotation_index < g_annotation_count) return node;
+    return NULL;
+}
+
+static void clear_tree_selection_on_blank_click(HWND tree) {
+    DWORD position = GetMessagePos();
+    TVHITTESTINFO hit = {0};
+    hit.pt = (POINT){GET_X_LPARAM(position), GET_Y_LPARAM(position)};
+    ScreenToClient(tree, &hit.pt);
+    TreeView_HitTest(tree, &hit);
+    if (hit.flags & (TVHT_ONITEM | TVHT_ONITEMBUTTON)) return;
+    if (tree == g_tree) {
+        HTREEITEM selected = TreeView_GetSelection(tree);
+        ResourceTreeNode *node = tree_node_data(selected);
+        if (node && node->kind == RESOURCE_ANNOTATION) {
+            HTREEITEM resource = TreeView_GetParent(tree, selected);
+            if (resource) {
+                TreeView_SelectItem(tree, resource);
+                return;
+            }
+        }
+    }
+    TreeView_SelectItem(tree, NULL);
+}
+
 static DWORD WINAPI preview_worker(void *parameter) {
     PreviewRequest *request = (PreviewRequest *)parameter;
     PreviewResult *result = (PreviewResult *)calloc(1, sizeof(*result));
@@ -1440,7 +1480,7 @@ static void recapture_current(void) {
                     APP_NAME, MB_OKCANCEL | MB_ICONQUESTION) != IDOK) return;
     if (capture_window_to(target, g_image_path)) {
         clear_preview();
-        load_png(g_image_path);
+        if (load_png(g_image_path)) g_resource_visible = TRUE;
         g_zoom = 0.0;
         g_pan_x = g_pan_y = 0;
         InvalidateRect(g_editor, NULL, FALSE);
@@ -1772,6 +1812,7 @@ static void activate_resource_node(ResourceTreeNode *node) {
         update_status();
     } else if (node && node->kind == RESOURCE_PNG && node->path) {
         if (!_wcsicmp(node->path, g_image_path)) {
+            g_resource_visible = TRUE;
             clear_preview();
             g_selected = -1;
             update_tool_availability();
@@ -1781,6 +1822,7 @@ static void activate_resource_node(ResourceTreeNode *node) {
     } else if (node && node->kind == RESOURCE_ANNOTATION &&
                node->annotation_index >= 0 &&
                node->annotation_index < g_annotation_count) {
+        g_resource_visible = TRUE;
         clear_preview();
         g_selected = node->annotation_index;
         set_tool_with_focus(TOOL_SELECT, FALSE);
@@ -1919,7 +1961,8 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if ((HWND)lp == g_context_label) {
             SetBkMode((HDC)wp, TRANSPARENT);
             SetTextColor((HDC)wp, g_preview_mode ? RGB(190, 90, 0) :
-                         g_image_path[0] ? RGB(0, 105, 145) : GetSysColor(COLOR_BTNTEXT));
+                         g_resource_visible && g_image_path[0] ? RGB(0, 105, 145) :
+                         GetSysColor(COLOR_BTNTEXT));
             return (LRESULT)GetSysColorBrush(COLOR_BTNFACE);
         }
         break;
@@ -2005,19 +2048,41 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             !g_rebuilding_resources) {
             NMTREEVIEWW *change = (NMTREEVIEWW *)lp;
             ResourceTreeNode *node = (ResourceTreeNode *)change->itemNew.lParam;
-            activate_resource_node(node);
+            if (node) activate_resource_node(node);
+            else {
+                BOOL was_showing_resource = !g_preview_mode && g_resource_visible;
+                g_resource_visible = FALSE;
+                g_selected = -1;
+                update_tool_availability();
+                if (was_showing_resource) {
+                    HWND target = selected_capture_window();
+                    if (target) preview_window(target);
+                    else {
+                        update_context_label();
+                        InvalidateRect(g_editor, NULL, FALSE);
+                    }
+                }
+            }
         }
         if (header->idFrom == ID_WINDOWS && header->code == TVN_SELCHANGEDW && !g_rebuilding_windows) {
             HWND target = selected_capture_window();
             if (target) preview_window(target);
-            else { clear_preview(); InvalidateRect(g_editor, NULL, FALSE); }
+            else if (g_preview_mode) {
+                ResourceTreeNode *resource = selected_active_resource_node();
+                if (resource) activate_resource_node(resource);
+                else {
+                    g_resource_visible = FALSE;
+                    clear_preview();
+                    InvalidateRect(g_editor, NULL, FALSE);
+                }
+            }
         }
         if (header->idFrom == ID_WINDOWS && header->code == NM_CLICK) {
             HWND target = clicked_capture_window();
             if (target && (!g_preview_mode || target != g_preview_target))
                 preview_window(target);
         }
-        if (header->idFrom == ID_TREE && header->code == NM_CLICK && g_preview_mode) {
+        if (header->idFrom == ID_TREE && header->code == NM_CLICK) {
             ResourceTreeNode *node = clicked_resource_node();
             BOOL current_png = node && node->kind == RESOURCE_PNG && node->path &&
                                !_wcsicmp(node->path, g_image_path);
@@ -2025,6 +2090,9 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 node->annotation_index >= 0 && node->annotation_index < g_annotation_count;
             if (current_png || current_annotation) activate_resource_node(node);
         }
+        if (header->code == NM_CLICK &&
+            (header->idFrom == ID_TREE || header->idFrom == ID_WINDOWS))
+            clear_tree_selection_on_blank_click(header->hwndFrom);
         if (header->idFrom == ID_TREE && header->code == NM_DBLCLK) {
             DWORD position = GetMessagePos();
             TVHITTESTINFO hit = {0};

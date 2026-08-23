@@ -59,6 +59,10 @@ destination to the corresponding directory.
   names appear as hover tooltips instead of labels over the image. Double-click
   a PNG or annotation name to rename it in place; Enter commits and Escape
   cancels. Resource renames move the PNG and JSON sidecar as one transaction.
+  Clicking blank space in either tree deselects that source. Deselecting an
+  annotation first returns selection to its parent PNG. If a displayed PNG or
+  window is deselected, the editor falls back to the source selected in the
+  other tree or becomes empty.
 - Changes are written only by **File → Save Annotations**. Switching images or exiting prompts if
   there are unsaved changes.
 - Select a window in the right column to start a continuously refreshed,
