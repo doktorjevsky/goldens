@@ -27,7 +27,7 @@ static int check_layout(int width, int height, UINT dpi, int preferred_left,
     if ((left_collapsed && layout.left_splitter.left != 0) ||
         (right_collapsed && layout.right_splitter.right != width)) return 1;
     if (layout.context_label.right > layout.view_buttons[0].left) return 1;
-    for (int i = 0; i < 4; ++i) {
+    for (int i = 0; i < GOLDEN_VIEW_BUTTON_COUNT; ++i) {
         if (layout.view_buttons[i].left < layout.editor.left ||
             layout.view_buttons[i].right > layout.editor.right ||
             layout.tool_buttons[i].right > layout.editor.left) return 1;
@@ -38,11 +38,19 @@ static int check_layout(int width, int height, UINT dpi, int preferred_left,
             layout.window_buttons[i].right > layout.window_tree.right) return 1;
         if (i && layout.window_buttons[i - 1].right > layout.window_buttons[i].left) return 1;
     }
+    if (!right_collapsed && layout.window_tree.right - layout.window_buttons[1].right !=
+        golden_scale_ui(GOLDEN_WINDOW_BUTTON_RIGHT_INSET, dpi)) return 1;
     return layout.editor.right > width || layout.window_tree.right > width;
 }
 
 int main(void) {
     int failed = 0;
+    GoldenUiLayout defaults = golden_compute_ui_layout(1600, 900, 96,
+        0, 0, FALSE, FALSE);
+    failed |= defaults.resource_tree.right - defaults.resource_tree.left !=
+              GOLDEN_RESOURCE_PANE_DEFAULT;
+    failed |= defaults.window_tree.right - defaults.window_tree.left !=
+              GOLDEN_WINDOWS_PANE_DEFAULT;
     failed |= check_layout(800, 480, 96, 270, 320, FALSE, FALSE);
     failed |= check_layout(1000, 650, 96, 420, 260, FALSE, FALSE);
     failed |= check_layout(1280, 800, 96, 180, 500, FALSE, FALSE);

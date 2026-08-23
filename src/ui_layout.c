@@ -33,9 +33,9 @@ GoldenUiLayout golden_compute_ui_layout(int width, int height, UINT dpi,
     int left_min = golden_scale_ui(GOLDEN_RESOURCE_PANE_MIN, dpi);
     int right_min = golden_scale_ui(GOLDEN_WINDOWS_PANE_MIN, dpi);
     int left = left_collapsed ? 0 : golden_scale_ui(
-        preferred_left > 0 ? preferred_left : 270, dpi);
+        preferred_left > 0 ? preferred_left : GOLDEN_RESOURCE_PANE_DEFAULT, dpi);
     int right = right_collapsed ? 0 : golden_scale_ui(
-        preferred_right > 0 ? preferred_right : 320, dpi);
+        preferred_right > 0 ? preferred_right : GOLDEN_WINDOWS_PANE_DEFAULT, dpi);
     left = left_collapsed ? 0 : max(left_min, min(golden_scale_ui(520, dpi), left));
     right = right_collapsed ? 0 : max(right_min, min(golden_scale_ui(560, dpi), right));
 
@@ -81,12 +81,12 @@ GoldenUiLayout golden_compute_ui_layout(int width, int height, UINT dpi,
         layout.tool_buttons[i] = make_rect(tool_x,
             golden_scale_ui(8 + i * 43, dpi), tool_width, golden_scale_ui(36, dpi));
 
-    const int view_widths[4] = {46, 34, 34, 58};
-    int view_total = golden_scale_ui(190, dpi);
+    const int view_widths[GOLDEN_VIEW_BUTTON_COUNT] = {46, 34, 34};
+    int view_total = golden_scale_ui(128, dpi);
     int view_x = editor_x + middle - view_total;
     layout.context_label = make_rect(editor_x, 0,
         max(golden_scale_ui(72, dpi), view_x - editor_x - golden_scale_ui(4, dpi)), top);
-    for (int i = 0; i < 4; ++i) {
+    for (int i = 0; i < GOLDEN_VIEW_BUTTON_COUNT; ++i) {
         layout.view_buttons[i] = make_rect(view_x, golden_scale_ui(6, dpi),
             golden_scale_ui(view_widths[i], dpi), golden_scale_ui(28, dpi));
         view_x = layout.view_buttons[i].right + golden_scale_ui(4, dpi);
@@ -94,7 +94,8 @@ GoldenUiLayout golden_compute_ui_layout(int width, int height, UINT dpi,
 
     const int window_widths[2] = {74, 82};
     if (!right_collapsed) {
-        int window_x = windows_x + right - golden_scale_ui(160, dpi);
+        int window_x = windows_x + right - golden_scale_ui(
+            160 + GOLDEN_WINDOW_BUTTON_RIGHT_INSET, dpi);
         for (int i = 0; i < 2; ++i) {
             layout.window_buttons[i] = make_rect(window_x, golden_scale_ui(6, dpi),
                 golden_scale_ui(window_widths[i], dpi), golden_scale_ui(28, dpi));

@@ -59,19 +59,24 @@ destination to the corresponding directory.
   names appear as hover tooltips instead of labels over the image. Double-click
   a PNG or annotation name to rename it in place; Enter commits and Escape
   cancels. Resource renames move the PNG and JSON sidecar as one transaction.
+  Clicking blank space in either tree deselects that source. Deselecting an
+  annotation first returns selection to its parent PNG. If a displayed PNG or
+  window is deselected, the editor falls back to the source selected in the
+  other tree or becomes empty.
 - Changes are written only by **File → Save Annotations**. Switching images or exiting prompts if
   there are unsaved changes.
 - Select a window in the right column to start a continuously refreshed,
   asynchronous bitmap preview in the center, then use **Capture** or
   **Recapture** beside the window list. Preview mode selects **Hand** and
   disables the annotation tools until an editable resource is selected again.
-  Double-clicking a window
-  starts a new capture. Open, closed, minimized, and renamed windows are
-  reconciled automatically.
+  Capture is available only for a selected window; Recapture additionally
+  requires a selected PNG or one of its annotations.
+  Open, closed, minimized, and renamed windows are reconciled automatically.
 - The contextual strip says either **Editing resource** or **Previewing
   window**; generic panel-title rows have been removed.
-- Use **Fit**, **−**, **+**, **100%**, or the mouse wheel to control zoom. Drag a preview, or
-  middle-drag an image, to pan. At 100%, image pixels are mapped exactly to
+- Use **Fit**, **−**, **+**, or the mouse wheel to control zoom. **View → Actual
+  Size** (or **1**) switches to 100%. Drag a preview, or middle-drag an image,
+  to pan. At 100%, image pixels are mapped exactly to
   display pixels; scaled views use halftone filtering. The editor is
   double-buffered so boundaries remain above the image throughout a drag.
 - The three-column layout is responsive and DPI-aware. Controls are repositioned

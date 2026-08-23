@@ -5,9 +5,13 @@
 
 #define GOLDEN_RESOURCE_PANE_MIN 150
 #define GOLDEN_WINDOWS_PANE_MIN 180
+#define GOLDEN_RESOURCE_PANE_DEFAULT GOLDEN_RESOURCE_PANE_MIN
+#define GOLDEN_WINDOWS_PANE_DEFAULT GOLDEN_WINDOWS_PANE_MIN
 #define GOLDEN_PANE_COLLAPSE_OVERSHOOT 48
 #define GOLDEN_SPLITTER_WIDTH 10
 #define GOLDEN_COLLAPSED_SPLITTER_WIDTH 16
+#define GOLDEN_WINDOW_BUTTON_RIGHT_INSET 6
+#define GOLDEN_VIEW_BUTTON_COUNT 3
 
 typedef struct {
     RECT resource_tree;
@@ -15,7 +19,7 @@ typedef struct {
     RECT tool_buttons[4];
     RECT context_label;
     RECT editor;
-    RECT view_buttons[4];
+    RECT view_buttons[GOLDEN_VIEW_BUTTON_COUNT];
     RECT window_buttons[2];
     RECT right_splitter;
     RECT window_tree;
