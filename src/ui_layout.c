@@ -94,7 +94,8 @@ GoldenUiLayout golden_compute_ui_layout(int width, int height, UINT dpi,
 
     const int window_widths[2] = {74, 82};
     if (!right_collapsed) {
-        int window_x = windows_x + right - golden_scale_ui(160, dpi);
+        int window_x = windows_x + right - golden_scale_ui(
+            160 + GOLDEN_WINDOW_BUTTON_RIGHT_INSET, dpi);
         for (int i = 0; i < 2; ++i) {
             layout.window_buttons[i] = make_rect(window_x, golden_scale_ui(6, dpi),
                 golden_scale_ui(window_widths[i], dpi), golden_scale_ui(28, dpi));

@@ -38,6 +38,8 @@ static int check_layout(int width, int height, UINT dpi, int preferred_left,
             layout.window_buttons[i].right > layout.window_tree.right) return 1;
         if (i && layout.window_buttons[i - 1].right > layout.window_buttons[i].left) return 1;
     }
+    if (!right_collapsed && layout.window_tree.right - layout.window_buttons[1].right !=
+        golden_scale_ui(GOLDEN_WINDOW_BUTTON_RIGHT_INSET, dpi)) return 1;
     return layout.editor.right > width || layout.window_tree.right > width;
 }
 

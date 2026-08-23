@@ -1182,6 +1182,31 @@ static HWND selected_capture_window(void) {
     return (HWND)item.lParam;
 }
 
+static HWND clicked_capture_window(void) {
+    DWORD position = GetMessagePos();
+    TVHITTESTINFO hit = {0};
+    hit.pt = (POINT){GET_X_LPARAM(position), GET_Y_LPARAM(position)};
+    ScreenToClient(g_windows, &hit.pt);
+    TreeView_HitTest(g_windows, &hit);
+    if (!hit.hItem || !(hit.flags & TVHT_ONITEM)) return NULL;
+    TVITEMW item = {0};
+    item.mask = TVIF_PARAM;
+    item.hItem = hit.hItem;
+    if (!TreeView_GetItem(g_windows, &item)) return NULL;
+    HWND target = (HWND)item.lParam;
+    return target && IsWindow(target) ? target : NULL;
+}
+
+static ResourceTreeNode *clicked_resource_node(void) {
+    DWORD position = GetMessagePos();
+    TVHITTESTINFO hit = {0};
+    hit.pt = (POINT){GET_X_LPARAM(position), GET_Y_LPARAM(position)};
+    ScreenToClient(g_tree, &hit.pt);
+    TreeView_HitTest(g_tree, &hit);
+    if (!hit.hItem || !(hit.flags & TVHT_ONITEM)) return NULL;
+    return tree_node_data(hit.hItem);
+}
+
 static DWORD WINAPI preview_worker(void *parameter) {
     PreviewRequest *request = (PreviewRequest *)parameter;
     PreviewResult *result = (PreviewResult *)calloc(1, sizeof(*result));
@@ -1740,6 +1765,29 @@ static HMENU create_main_menu(void) {
     return bar;
 }
 
+static void activate_resource_node(ResourceTreeNode *node) {
+    if (node && node->kind == RESOURCE_DIRECTORY && node->path) {
+        wcsncpy(g_current_dir, node->path, _countof(g_current_dir) - 1);
+        g_current_dir[_countof(g_current_dir) - 1] = 0;
+        update_status();
+    } else if (node && node->kind == RESOURCE_PNG && node->path) {
+        if (!_wcsicmp(node->path, g_image_path)) {
+            clear_preview();
+            g_selected = -1;
+            update_tool_availability();
+            update_context_label();
+            InvalidateRect(g_editor, NULL, FALSE);
+        } else load_resource(node->path);
+    } else if (node && node->kind == RESOURCE_ANNOTATION &&
+               node->annotation_index >= 0 &&
+               node->annotation_index < g_annotation_count) {
+        clear_preview();
+        g_selected = node->annotation_index;
+        set_tool_with_focus(TOOL_SELECT, FALSE);
+        InvalidateRect(g_editor, NULL, FALSE);
+    }
+}
+
 static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
     case WM_CREATE: {
@@ -1957,31 +2005,25 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             !g_rebuilding_resources) {
             NMTREEVIEWW *change = (NMTREEVIEWW *)lp;
             ResourceTreeNode *node = (ResourceTreeNode *)change->itemNew.lParam;
-            if (node && node->kind == RESOURCE_DIRECTORY && node->path) {
-                wcsncpy(g_current_dir, node->path, _countof(g_current_dir) - 1);
-                g_current_dir[_countof(g_current_dir) - 1] = 0;
-                update_status();
-            } else if (node && node->kind == RESOURCE_PNG && node->path) {
-                if (!_wcsicmp(node->path, g_image_path)) {
-                    clear_preview();
-                    g_selected = -1;
-                    update_tool_availability();
-                    update_context_label();
-                    InvalidateRect(g_editor, NULL, FALSE);
-                } else load_resource(node->path);
-            } else if (node && node->kind == RESOURCE_ANNOTATION &&
-                       node->annotation_index >= 0 &&
-                       node->annotation_index < g_annotation_count) {
-                clear_preview();
-                g_selected = node->annotation_index;
-                set_tool_with_focus(TOOL_SELECT, FALSE);
-                InvalidateRect(g_editor, NULL, FALSE);
-            }
+            activate_resource_node(node);
         }
         if (header->idFrom == ID_WINDOWS && header->code == TVN_SELCHANGEDW && !g_rebuilding_windows) {
             HWND target = selected_capture_window();
             if (target) preview_window(target);
             else { clear_preview(); InvalidateRect(g_editor, NULL, FALSE); }
+        }
+        if (header->idFrom == ID_WINDOWS && header->code == NM_CLICK) {
+            HWND target = clicked_capture_window();
+            if (target && (!g_preview_mode || target != g_preview_target))
+                preview_window(target);
+        }
+        if (header->idFrom == ID_TREE && header->code == NM_CLICK && g_preview_mode) {
+            ResourceTreeNode *node = clicked_resource_node();
+            BOOL current_png = node && node->kind == RESOURCE_PNG && node->path &&
+                               !_wcsicmp(node->path, g_image_path);
+            BOOL current_annotation = node && node->kind == RESOURCE_ANNOTATION &&
+                node->annotation_index >= 0 && node->annotation_index < g_annotation_count;
+            if (current_png || current_annotation) activate_resource_node(node);
         }
         if (header->idFrom == ID_WINDOWS && header->code == NM_DBLCLK && selected_capture_window())
             capture_new();
