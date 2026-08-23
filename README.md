@@ -63,7 +63,8 @@ destination to the corresponding directory.
   there are unsaved changes.
 - Select a window in the right column to start a continuously refreshed,
   asynchronous bitmap preview in the center, then use **Capture** or
-  **Recapture** beside the window list.
+  **Recapture** beside the window list. Preview mode selects **Hand** and
+  disables the annotation tools until an editable resource is selected again.
   Double-clicking a window
   starts a new capture. Open, closed, minimized, and renamed windows are
   reconciled automatically.
