@@ -1,0 +1,24 @@
+# Build output directories (at any depth)
+[Bb]uild/
+[Tt]arget/
+
+# Executables and application packages
+*.exe
+*.com
+*.scr
+*.msi
+*.msix
+*.appx
+
+# Compiled, linker, and debug artifacts
+*.dll
+*.obj
+*.o
+*.a
+*.lib
+*.pdb
+*.ilk
+*.exp
+*.res
+
+*.plist
