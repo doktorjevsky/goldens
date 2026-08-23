@@ -21,14 +21,13 @@ GoldenUiLayout golden_compute_ui_layout(int width, int height, UINT dpi,
                                         int preferred_left, int preferred_right,
                                         BOOL left_collapsed, BOOL right_collapsed) {
     GoldenUiLayout layout = {0};
-    int top = golden_scale_ui(40, dpi);
+    int top = golden_scale_ui(34, dpi);
     int status_height = golden_scale_ui(24, dpi);
     int gap = golden_scale_ui(2, dpi);
     int left_splitter = golden_scale_ui(left_collapsed ?
         GOLDEN_COLLAPSED_SPLITTER_WIDTH : GOLDEN_SPLITTER_WIDTH, dpi);
     int right_splitter = golden_scale_ui(right_collapsed ?
         GOLDEN_COLLAPSED_SPLITTER_WIDTH : GOLDEN_SPLITTER_WIDTH, dpi);
-    int palette = golden_scale_ui(82, dpi);
     int middle_min = golden_scale_ui(286, dpi);
     int left_min = golden_scale_ui(GOLDEN_RESOURCE_PANE_MIN, dpi);
     int right_min = golden_scale_ui(GOLDEN_WINDOWS_PANE_MIN, dpi);
@@ -39,7 +38,7 @@ GoldenUiLayout golden_compute_ui_layout(int width, int height, UINT dpi,
     left = left_collapsed ? 0 : max(left_min, min(golden_scale_ui(520, dpi), left));
     right = right_collapsed ? 0 : max(right_min, min(golden_scale_ui(560, dpi), right));
 
-    int maximum_sides = max(0, width - palette - left_splitter -
+    int maximum_sides = max(0, width - left_splitter -
                             right_splitter - gap - middle_min);
     if (left + right > maximum_sides) {
         int minimum_sum = (left_collapsed ? 0 : left_min) +
@@ -59,8 +58,7 @@ GoldenUiLayout golden_compute_ui_layout(int width, int height, UINT dpi,
     }
 
     int left_splitter_x = left;
-    int palette_x = left_splitter_x + left_splitter;
-    int editor_x = palette_x + palette + gap;
+    int editor_x = left_splitter_x + left_splitter + gap;
     int middle = max(1, width - editor_x - right_splitter - right);
     int right_splitter_x = editor_x + middle;
     int windows_x = right_splitter_x + right_splitter;
@@ -75,31 +73,36 @@ GoldenUiLayout golden_compute_ui_layout(int width, int height, UINT dpi,
                          make_rect(windows_x, top, right, content_height);
     layout.status = make_rect(0, content_bottom, width, status_height);
 
-    int tool_x = palette_x + golden_scale_ui(7, dpi);
-    int tool_width = palette - golden_scale_ui(12, dpi);
-    for (int i = 0; i < 4; ++i)
-        layout.tool_buttons[i] = make_rect(tool_x,
-            golden_scale_ui(8 + i * 43, dpi), tool_width, golden_scale_ui(36, dpi));
-
-    const int view_widths[GOLDEN_VIEW_BUTTON_COUNT] = {46, 34, 34};
-    int view_total = golden_scale_ui(128, dpi);
-    int view_x = editor_x + middle - view_total;
-    layout.context_label = make_rect(editor_x, 0,
-        max(golden_scale_ui(72, dpi), view_x - editor_x - golden_scale_ui(4, dpi)), top);
-    for (int i = 0; i < GOLDEN_VIEW_BUTTON_COUNT; ++i) {
-        layout.view_buttons[i] = make_rect(view_x, golden_scale_ui(6, dpi),
-            golden_scale_ui(view_widths[i], dpi), golden_scale_ui(28, dpi));
-        view_x = layout.view_buttons[i].right + golden_scale_ui(4, dpi);
+    int tool_x = editor_x + golden_scale_ui(4, dpi);
+    int tool_size = golden_scale_ui(26, dpi);
+    for (int i = 0; i < 4; ++i) {
+        layout.tool_buttons[i] = make_rect(tool_x, golden_scale_ui(4, dpi),
+            tool_size, tool_size);
+        tool_x = layout.tool_buttons[i].right + golden_scale_ui(3, dpi);
     }
 
-    const int window_widths[2] = {74, 82};
+    const int view_widths[GOLDEN_VIEW_BUTTON_COUNT] = {38, 26, 26};
+    int view_total = golden_scale_ui(102, dpi);
+    int view_x = editor_x + middle - view_total;
+    layout.context_label = make_rect(tool_x + golden_scale_ui(1, dpi), 0,
+        max(1, view_x - tool_x - golden_scale_ui(5, dpi)), top);
+    for (int i = 0; i < GOLDEN_VIEW_BUTTON_COUNT; ++i) {
+        layout.view_buttons[i] = make_rect(view_x, golden_scale_ui(5, dpi),
+            golden_scale_ui(view_widths[i], dpi), golden_scale_ui(24, dpi));
+        view_x = layout.view_buttons[i].right + golden_scale_ui(3, dpi);
+    }
+
+    const int window_widths[2] = {60, 70};
     if (!right_collapsed) {
-        int window_x = windows_x + right - golden_scale_ui(
-            160 + GOLDEN_WINDOW_BUTTON_RIGHT_INSET, dpi);
+        int window_gap = golden_scale_ui(3, dpi);
+        int window_x = windows_x + right -
+            golden_scale_ui(GOLDEN_WINDOW_BUTTON_RIGHT_INSET, dpi) -
+            golden_scale_ui(window_widths[0], dpi) -
+            golden_scale_ui(window_widths[1], dpi) - window_gap;
         for (int i = 0; i < 2; ++i) {
-            layout.window_buttons[i] = make_rect(window_x, golden_scale_ui(6, dpi),
-                golden_scale_ui(window_widths[i], dpi), golden_scale_ui(28, dpi));
-            window_x = layout.window_buttons[i].right + golden_scale_ui(4, dpi);
+            layout.window_buttons[i] = make_rect(window_x, golden_scale_ui(5, dpi),
+                golden_scale_ui(window_widths[i], dpi), golden_scale_ui(24, dpi));
+            window_x = layout.window_buttons[i].right + window_gap;
         }
     }
     return layout;
