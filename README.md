@@ -65,9 +65,7 @@ destination to the corresponding directory.
   asynchronous bitmap preview in the center, then use **Capture** or
   **Recapture** beside the window list. Preview mode selects **Hand** and
   disables the annotation tools until an editable resource is selected again.
-  Double-clicking a window
-  starts a new capture. Open, closed, minimized, and renamed windows are
-  reconciled automatically.
+  Open, closed, minimized, and renamed windows are reconciled automatically.
 - The contextual strip says either **Editing resource** or **Previewing
   window**; generic panel-title rows have been removed.
 - Use **Fit**, **−**, **+**, **100%**, or the mouse wheel to control zoom. Drag a preview, or

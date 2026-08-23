@@ -2025,8 +2025,6 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 node->annotation_index >= 0 && node->annotation_index < g_annotation_count;
             if (current_png || current_annotation) activate_resource_node(node);
         }
-        if (header->idFrom == ID_WINDOWS && header->code == NM_DBLCLK && selected_capture_window())
-            capture_new();
         if (header->idFrom == ID_TREE && header->code == NM_DBLCLK) {
             DWORD position = GetMessagePos();
             TVHITTESTINFO hit = {0};
