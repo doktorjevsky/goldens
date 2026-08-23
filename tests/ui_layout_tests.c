@@ -45,6 +45,12 @@ static int check_layout(int width, int height, UINT dpi, int preferred_left,
 
 int main(void) {
     int failed = 0;
+    GoldenUiLayout defaults = golden_compute_ui_layout(1600, 900, 96,
+        0, 0, FALSE, FALSE);
+    failed |= defaults.resource_tree.right - defaults.resource_tree.left !=
+              GOLDEN_RESOURCE_PANE_DEFAULT;
+    failed |= defaults.window_tree.right - defaults.window_tree.left !=
+              GOLDEN_WINDOWS_PANE_DEFAULT;
     failed |= check_layout(800, 480, 96, 270, 320, FALSE, FALSE);
     failed |= check_layout(1000, 650, 96, 420, 260, FALSE, FALSE);
     failed |= check_layout(1280, 800, 96, 180, 500, FALSE, FALSE);

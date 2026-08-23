@@ -33,9 +33,9 @@ GoldenUiLayout golden_compute_ui_layout(int width, int height, UINT dpi,
     int left_min = golden_scale_ui(GOLDEN_RESOURCE_PANE_MIN, dpi);
     int right_min = golden_scale_ui(GOLDEN_WINDOWS_PANE_MIN, dpi);
     int left = left_collapsed ? 0 : golden_scale_ui(
-        preferred_left > 0 ? preferred_left : 270, dpi);
+        preferred_left > 0 ? preferred_left : GOLDEN_RESOURCE_PANE_DEFAULT, dpi);
     int right = right_collapsed ? 0 : golden_scale_ui(
-        preferred_right > 0 ? preferred_right : 320, dpi);
+        preferred_right > 0 ? preferred_right : GOLDEN_WINDOWS_PANE_DEFAULT, dpi);
     left = left_collapsed ? 0 : max(left_min, min(golden_scale_ui(520, dpi), left));
     right = right_collapsed ? 0 : max(right_min, min(golden_scale_ui(560, dpi), right));
 
