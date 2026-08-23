@@ -42,7 +42,8 @@ destination to the corresponding directory.
 
 - **File**, **Edit**, **View**, and **Capture** menus contain document and
   application commands. These are deliberately separate from image tools.
-- The vertical tool palette uses the official Microsoft Fluent System Icons for
+- The compact horizontal tool row above the editor uses the official Microsoft
+  Fluent System Icons for
   **Select**, **Rectangle**, **Click**, and **Hand**. Their antialiased masks are
   rendered at the current DPI and tinted for each button state; native hover
   tooltips and accessible button names remain available. Select moves
