@@ -27,7 +27,7 @@ static int check_layout(int width, int height, UINT dpi, int preferred_left,
     if ((left_collapsed && layout.left_splitter.left != 0) ||
         (right_collapsed && layout.right_splitter.right != width)) return 1;
     if (layout.context_label.right > layout.view_buttons[0].left) return 1;
-    for (int i = 0; i < 4; ++i) {
+    for (int i = 0; i < GOLDEN_VIEW_BUTTON_COUNT; ++i) {
         if (layout.view_buttons[i].left < layout.editor.left ||
             layout.view_buttons[i].right > layout.editor.right ||
             layout.tool_buttons[i].right > layout.editor.left) return 1;

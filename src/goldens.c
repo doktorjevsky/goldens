@@ -96,7 +96,7 @@ static HWND g_main, g_tree, g_editor, g_windows, g_status;
 static HWND g_editor_tooltip, g_tool_tooltip;
 static HWND g_left_splitter, g_right_splitter;
 static HWND g_context_label;
-static HWND g_tool_buttons[4], g_view_buttons[4], g_window_buttons[2];
+static HWND g_tool_buttons[4], g_view_buttons[GOLDEN_VIEW_BUTTON_COUNT], g_window_buttons[2];
 static TOOLINFOW g_tool_button_tooltips[4];
 static IWICImagingFactory *g_wic;
 static wchar_t g_root[MAX_PATH * 4];
@@ -1692,7 +1692,8 @@ static void layout_children(HWND hwnd) {
     for (int i = 0; i < 4; ++i) PLACE_CONTROL(g_tool_buttons[i], layout.tool_buttons[i]);
     PLACE_CONTROL(g_context_label, layout.context_label);
     PLACE_CONTROL(g_editor, layout.editor);
-    for (int i = 0; i < 4; ++i) PLACE_CONTROL(g_view_buttons[i], layout.view_buttons[i]);
+    for (int i = 0; i < GOLDEN_VIEW_BUTTON_COUNT; ++i)
+        PLACE_CONTROL(g_view_buttons[i], layout.view_buttons[i]);
     for (int i = 0; i < 2; ++i) PLACE_CONTROL(g_window_buttons[i], layout.window_buttons[i]);
     PLACE_CONTROL(g_right_splitter, layout.right_splitter);
     PLACE_CONTROL(g_windows, layout.window_tree);
@@ -1872,9 +1873,9 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 SendMessageW(g_tool_tooltip, TTM_ADDTOOLW, 0, (LPARAM)tool);
             }
         }
-        const wchar_t *view_labels[] = {L"Fit", L"−", L"+", L"100%"};
-        const int view_ids[] = {ID_FIT, ID_ZOOM_OUT, ID_ZOOM_IN, ID_ACTUAL};
-        for (int i = 0; i < 4; ++i)
+        const wchar_t *view_labels[] = {L"Fit", L"−", L"+"};
+        const int view_ids[] = {ID_FIT, ID_ZOOM_OUT, ID_ZOOM_IN};
+        for (int i = 0; i < GOLDEN_VIEW_BUTTON_COUNT; ++i)
             g_view_buttons[i] = CreateWindowW(L"BUTTON", view_labels[i],
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd,
                 (HMENU)(INT_PTR)view_ids[i], g_instance, NULL);

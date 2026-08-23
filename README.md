@@ -72,8 +72,9 @@ destination to the corresponding directory.
   Open, closed, minimized, and renamed windows are reconciled automatically.
 - The contextual strip says either **Editing resource** or **Previewing
   window**; generic panel-title rows have been removed.
-- Use **Fit**, **−**, **+**, **100%**, or the mouse wheel to control zoom. Drag a preview, or
-  middle-drag an image, to pan. At 100%, image pixels are mapped exactly to
+- Use **Fit**, **−**, **+**, or the mouse wheel to control zoom. **View → Actual
+  Size** (or **1**) switches to 100%. Drag a preview, or middle-drag an image,
+  to pan. At 100%, image pixels are mapped exactly to
   display pixels; scaled views use halftone filtering. The editor is
   double-buffered so boundaries remain above the image throughout a drag.
 - The three-column layout is responsive and DPI-aware. Controls are repositioned

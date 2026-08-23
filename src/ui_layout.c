@@ -81,12 +81,12 @@ GoldenUiLayout golden_compute_ui_layout(int width, int height, UINT dpi,
         layout.tool_buttons[i] = make_rect(tool_x,
             golden_scale_ui(8 + i * 43, dpi), tool_width, golden_scale_ui(36, dpi));
 
-    const int view_widths[4] = {46, 34, 34, 58};
-    int view_total = golden_scale_ui(190, dpi);
+    const int view_widths[GOLDEN_VIEW_BUTTON_COUNT] = {46, 34, 34};
+    int view_total = golden_scale_ui(128, dpi);
     int view_x = editor_x + middle - view_total;
     layout.context_label = make_rect(editor_x, 0,
         max(golden_scale_ui(72, dpi), view_x - editor_x - golden_scale_ui(4, dpi)), top);
-    for (int i = 0; i < 4; ++i) {
+    for (int i = 0; i < GOLDEN_VIEW_BUTTON_COUNT; ++i) {
         layout.view_buttons[i] = make_rect(view_x, golden_scale_ui(6, dpi),
             golden_scale_ui(view_widths[i], dpi), golden_scale_ui(28, dpi));
         view_x = layout.view_buttons[i].right + golden_scale_ui(4, dpi);
