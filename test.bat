@@ -29,6 +29,12 @@ if errorlevel 1 exit /b 1
 build\render_tests.exe
 if errorlevel 1 exit /b 1
 
+%CC% -std=c17 -O2 -Wall -Wextra tests\tool_icon_tests.c src\ui_tool_icon.c ^
+  -o build\tool_icon_tests.exe -lgdi32 -lmsimg32 -luser32
+if errorlevel 1 exit /b 1
+build\tool_icon_tests.exe
+if errorlevel 1 exit /b 1
+
 %CC% -std=c17 -O2 -Wall -Wextra tests\ui_layout_tests.c src\ui_layout.c ^
   -o build\ui_layout_tests.exe -luser32
 if errorlevel 1 exit /b 1

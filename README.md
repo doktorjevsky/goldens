@@ -42,8 +42,11 @@ destination to the corresponding directory.
 
 - **File**, **Edit**, **View**, and **Capture** menus contain document and
   application commands. These are deliberately separate from image tools.
-- The vertical tool palette contains **Select**, **Rectangle**, **Click**, and
-  **Hand**. Select moves annotations and resizes from the lower-right handle.
+- The vertical tool palette uses the official Microsoft Fluent System Icons for
+  **Select**, **Rectangle**, **Click**, and **Hand**. Their antialiased masks are
+  rendered at the current DPI and tinted for each button state; native hover
+  tooltips and accessible button names remain available. Select moves
+  annotations and resizes from the lower-right handle.
   Rectangle draws a new boundary and immediately asks for its unique name.
   After a successful creation Goldens returns to Select. Click is disabled until
   an annotation is selected and only accepts points inside that annotation.
@@ -87,8 +90,9 @@ click normalization, viewport transforms, multi-annotation JSON round trips,
 live top-level window lifecycle reconciliation (including minimized windows),
 exact 1:1 GDI rendering, overlay ordering, custom and collapsed column layouts
 from compact to wide and 100–200% DPI, version-compatible native tooltip
-registration and positioning, transactional PNG/JSON renames with post-rename
-saves, lossless BGRA PNG encode/decode, and the window-preview allocation/copy pipeline.
+registration and positioning, DPI-scaled tool icon rasterization, transactional
+PNG/JSON renames with post-rename saves, lossless BGRA PNG encode/decode, and
+the window-preview allocation/copy pipeline.
 
 Run `install-hooks.bat` once after cloning. It configures the versioned
 `.githooks` directory. Both pre-commit and pre-push run the complete Windows

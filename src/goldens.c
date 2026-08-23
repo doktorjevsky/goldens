@@ -22,6 +22,7 @@
 #include "editor_render.h"
 #include "ui_layout.h"
 #include "ui_tooltip.h"
+#include "ui_tool_icon.h"
 #include "resource_ops.h"
 
 #define APP_NAME L"Goldens"
@@ -92,10 +93,11 @@ typedef struct {
 
 static HINSTANCE g_instance;
 static HWND g_main, g_tree, g_editor, g_windows, g_status;
-static HWND g_editor_tooltip;
+static HWND g_editor_tooltip, g_tool_tooltip;
 static HWND g_left_splitter, g_right_splitter;
 static HWND g_context_label;
 static HWND g_tool_buttons[4], g_view_buttons[4], g_window_buttons[2];
+static TOOLINFOW g_tool_button_tooltips[4];
 static IWICImagingFactory *g_wic;
 static wchar_t g_root[MAX_PATH * 4];
 static wchar_t g_image_path[MAX_PATH * 4];
@@ -141,11 +143,14 @@ static int g_tooltip_visible = -1;
 static BOOL g_editor_mouse_tracking;
 static wchar_t g_tooltip_text[128];
 static TOOLINFOW g_editor_tooltip_tool;
+static int g_hovered_tool = -1;
 
 static LRESULT CALLBACK MainProc(HWND, UINT, WPARAM, LPARAM);
 static LRESULT CALLBACK EditorProc(HWND, UINT, WPARAM, LPARAM);
 static LRESULT CALLBACK PromptProc(HWND, UINT, WPARAM, LPARAM);
 static LRESULT CALLBACK SplitterProc(HWND, UINT, WPARAM, LPARAM);
+static LRESULT CALLBACK ToolButtonProc(HWND, UINT, WPARAM, LPARAM,
+                                       UINT_PTR, DWORD_PTR);
 static BOOL prompt_text(HWND owner, const wchar_t *title, const wchar_t *label,
                         wchar_t *value, size_t capacity);
 static void preview_window(HWND target);
@@ -159,6 +164,7 @@ static void set_tool(ToolMode tool);
 static void layout_children(HWND hwnd);
 static void hide_annotation_tooltip(HWND hwnd);
 static void update_annotation_hover(HWND hwnd, POINT client);
+static void draw_tool_button(const DRAWITEMSTRUCT *item);
 
 static void show_error(const wchar_t *message) {
     MessageBoxW(g_main, message, APP_NAME, MB_OK | MB_ICONERROR);
@@ -1504,6 +1510,102 @@ static LRESULT CALLBACK SplitterProc(HWND hwnd, UINT message, WPARAM wp, LPARAM 
     return DefWindowProcW(hwnd, message, wp, lp);
 }
 
+static LRESULT CALLBACK ToolButtonProc(HWND hwnd, UINT message, WPARAM wp,
+                                       LPARAM lp, UINT_PTR subclass_id,
+                                       DWORD_PTR reference) {
+    int index = (int)reference;
+    switch (message) {
+    case WM_MOUSEMOVE:
+        if (IsWindowEnabled(hwnd) && g_hovered_tool != index) {
+            int previous = g_hovered_tool;
+            g_hovered_tool = index;
+            if (previous >= 0 && previous < 4 && g_tool_buttons[previous])
+                InvalidateRect(g_tool_buttons[previous], NULL, FALSE);
+            InvalidateRect(hwnd, NULL, FALSE);
+            TRACKMOUSEEVENT tracking = {sizeof(tracking), TME_LEAVE, hwnd, 0};
+            TrackMouseEvent(&tracking);
+        }
+        break;
+    case WM_MOUSELEAVE:
+        if (g_hovered_tool == index) {
+            g_hovered_tool = -1;
+            InvalidateRect(hwnd, NULL, FALSE);
+        }
+        break;
+    case WM_ENABLE:
+        if (!wp && g_hovered_tool == index) g_hovered_tool = -1;
+        InvalidateRect(hwnd, NULL, FALSE);
+        break;
+    case WM_NCDESTROY:
+        RemoveWindowSubclass(hwnd, ToolButtonProc, subclass_id);
+        break;
+    }
+    return DefSubclassProc(hwnd, message, wp, lp);
+}
+
+static void draw_tool_button(const DRAWITEMSTRUCT *item) {
+    if (!item || item->CtlID < ID_TOOL_SELECT || item->CtlID > ID_TOOL_HAND)
+        return;
+    int index = (int)item->CtlID - ID_TOOL_SELECT;
+    BOOL disabled = (item->itemState & ODS_DISABLED) != 0;
+    BOOL pressed = (item->itemState & ODS_SELECTED) != 0;
+    BOOL selected = index == (int)g_tool;
+    BOOL hovered = index == g_hovered_tool && !disabled;
+
+    COLORREF background = GetSysColor(COLOR_BTNFACE);
+    COLORREF border = GetSysColor(COLOR_3DSHADOW);
+    COLORREF foreground = disabled ? GetSysColor(COLOR_GRAYTEXT) :
+                                      GetSysColor(COLOR_BTNTEXT);
+    if (selected) {
+        background = pressed ? RGB(194, 225, 237) : RGB(218, 239, 247);
+        border = RGB(22, 131, 173);
+        foreground = disabled ? GetSysColor(COLOR_GRAYTEXT) : RGB(7, 90, 122);
+    } else if (pressed) {
+        background = GetSysColor(COLOR_3DLIGHT);
+        border = GetSysColor(COLOR_3DDKSHADOW);
+    } else if (hovered) {
+        background = GetSysColor(COLOR_3DHIGHLIGHT);
+        border = GetSysColor(COLOR_HOTLIGHT);
+    }
+
+    UINT dpi = GetDpiForWindow(item->hwndItem);
+    int radius = max(2, golden_scale_ui(4, dpi));
+    HPEN pen = CreatePen(PS_SOLID, max(1, golden_scale_ui(1, dpi)), border);
+    HBRUSH brush = CreateSolidBrush(background);
+    int saved = SaveDC(item->hDC);
+    if (!saved) {
+        FillRect(item->hDC, &item->rcItem, GetSysColorBrush(COLOR_BTNFACE));
+        if (pen) DeleteObject(pen);
+        if (brush) DeleteObject(brush);
+        return;
+    }
+    FillRect(item->hDC, &item->rcItem, GetSysColorBrush(COLOR_BTNFACE));
+    if (pen && brush) {
+        SelectObject(item->hDC, pen);
+        SelectObject(item->hDC, brush);
+        RoundRect(item->hDC, item->rcItem.left, item->rcItem.top,
+                  item->rcItem.right, item->rcItem.bottom, radius, radius);
+    } else {
+        FillRect(item->hDC, &item->rcItem, GetSysColorBrush(COLOR_BTNFACE));
+    }
+
+    RECT icon_bounds = item->rcItem;
+    if (pressed) OffsetRect(&icon_bounds, golden_scale_ui(1, dpi),
+                            golden_scale_ui(1, dpi));
+    golden_draw_tool_icon(item->hDC, (GoldenToolIcon)index, &icon_bounds,
+                          foreground, dpi);
+
+    if (item->itemState & ODS_FOCUS) {
+        RECT focus = item->rcItem;
+        InflateRect(&focus, -golden_scale_ui(3, dpi),
+                    -golden_scale_ui(3, dpi));
+        DrawFocusRect(item->hDC, &focus);
+    }
+    RestoreDC(item->hDC, saved);
+    if (pen) DeleteObject(pen);
+    if (brush) DeleteObject(brush);
+}
+
 static void layout_children(HWND hwnd) {
     RECT client;
     GetClientRect(hwnd, &client);
@@ -1559,7 +1661,7 @@ static void update_tool_availability(void) {
         BOOL available = g_preview_mode ? i == TOOL_HAND :
                          i != TOOL_CLICK || click_available;
         EnableWindow(g_tool_buttons[i], available);
-        SendMessageW(g_tool_buttons[i], BM_SETCHECK, i == (int)g_tool ? BST_CHECKED : BST_UNCHECKED, 0);
+        InvalidateRect(g_tool_buttons[i], NULL, FALSE);
     }
 }
 
@@ -1648,12 +1750,36 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             0, 0, 0, 0, hwnd, NULL, g_instance, NULL);
 
         const wchar_t *tool_labels[] = {L"Select", L"Rectangle", L"Click", L"Hand"};
+        const wchar_t *tool_tips[] = {L"Select", L"Rectangle", L"Click point", L"Hand (pan)"};
         const int tool_ids[] = {ID_TOOL_SELECT, ID_TOOL_RECTANGLE, ID_TOOL_CLICK, ID_TOOL_HAND};
         for (int i = 0; i < 4; ++i) {
-            DWORD style = WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTORADIOBUTTON | BS_PUSHLIKE;
+            DWORD style = WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW;
             if (!i) style |= WS_GROUP;
             g_tool_buttons[i] = CreateWindowW(L"BUTTON", tool_labels[i], style,
                 0, 0, 0, 0, hwnd, (HMENU)(INT_PTR)tool_ids[i], g_instance, NULL);
+            if (g_tool_buttons[i])
+                SetWindowSubclass(g_tool_buttons[i], ToolButtonProc,
+                                  (UINT_PTR)(i + 1), (DWORD_PTR)i);
+        }
+        g_tool_tooltip = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, NULL,
+            WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
+            CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
+            hwnd, NULL, g_instance, NULL);
+        if (g_tool_tooltip) {
+            SetWindowPos(g_tool_tooltip, HWND_TOPMOST, 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            SendMessageW(g_tool_tooltip, TTM_SETDELAYTIME, TTDT_INITIAL, 450);
+            for (int i = 0; i < 4; ++i) {
+                TOOLINFOW *tool = &g_tool_button_tooltips[i];
+                ZeroMemory(tool, sizeof(*tool));
+                tool->cbSize = TTTOOLINFO_V1_SIZE;
+                tool->uFlags = TTF_IDISHWND | TTF_SUBCLASS;
+                tool->hwnd = hwnd;
+                tool->uId = (UINT_PTR)g_tool_buttons[i];
+                tool->hinst = g_instance;
+                tool->lpszText = (wchar_t *)tool_tips[i];
+                SendMessageW(g_tool_tooltip, TTM_ADDTOOLW, 0, (LPARAM)tool);
+            }
         }
         const wchar_t *view_labels[] = {L"Fit", L"−", L"+", L"100%"};
         const int view_ids[] = {ID_FIT, ID_ZOOM_OUT, ID_ZOOM_IN, ID_ACTUAL};
@@ -1733,6 +1859,14 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_COMMAND:
         handle_command(LOWORD(wp));
         return 0;
+    case WM_DRAWITEM: {
+        DRAWITEMSTRUCT *item = (DRAWITEMSTRUCT *)lp;
+        if (item && item->CtlID >= ID_TOOL_SELECT && item->CtlID <= ID_TOOL_HAND) {
+            draw_tool_button(item);
+            return TRUE;
+        }
+        break;
+    }
     case WM_CTLCOLORSTATIC:
         if ((HWND)lp == g_context_label) {
             SetBkMode((HDC)wp, TRANSPARENT);
@@ -1871,6 +2005,10 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (g_editor_tooltip) {
             DestroyWindow(g_editor_tooltip);
             g_editor_tooltip = NULL;
+        }
+        if (g_tool_tooltip) {
+            DestroyWindow(g_tool_tooltip);
+            g_tool_tooltip = NULL;
         }
         free_tree_item(g_tree, TreeView_GetRoot(g_tree));
         clear_preview();
