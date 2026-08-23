@@ -125,6 +125,7 @@ static RECT g_drag_original;
 static BOOL g_drawing;
 static POINT g_draw_start, g_draw_current;
 static ToolMode g_tool = TOOL_SELECT;
+static ToolMode g_tool_before_preview = TOOL_SELECT;
 static GoldenWindowInfo g_window_items[MAX_WINDOWS];
 static int g_window_count;
 static BOOL g_rebuilding_windows;
@@ -372,12 +373,14 @@ static void clear_image(void) {
 }
 
 static void clear_preview(void) {
+    BOOL was_previewing = g_preview_mode;
     InterlockedIncrement(&g_preview_generation);
     golden_image_free(&g_preview_image);
     g_preview_target = NULL;
     g_preview_title[0] = 0;
     g_preview_mode = FALSE;
     g_preview_loading = FALSE;
+    if (was_previewing) g_tool = g_tool_before_preview;
     update_context_label();
     update_tool_availability();
 }
@@ -1213,6 +1216,7 @@ static void preview_window(HWND target) {
         return;
     }
     clear_preview();
+    g_tool_before_preview = g_tool;
     g_preview_target = target;
     GetWindowTextW(target, g_preview_title, _countof(g_preview_title));
     g_preview_mode = TRUE;
@@ -1530,6 +1534,7 @@ static void layout_children(HWND hwnd) {
 }
 
 static void set_tool_with_focus(ToolMode tool, BOOL focus_editor) {
+    if (g_preview_mode && tool != TOOL_HAND) return;
     if (tool == TOOL_CLICK && (g_preview_mode || g_selected < 0 ||
                                g_selected >= g_annotation_count)) {
         MessageBeep(MB_ICONWARNING);
@@ -1545,13 +1550,17 @@ static void set_tool(ToolMode tool) {
 }
 
 static void update_tool_availability(void) {
-    if (!g_tool_buttons[2]) return;
+    if (!g_tool_buttons[0]) return;
     BOOL click_available = !g_preview_mode && g_selected >= 0 &&
                            g_selected < g_annotation_count;
-    EnableWindow(g_tool_buttons[2], click_available);
-    if (!click_available && g_tool == TOOL_CLICK) g_tool = TOOL_SELECT;
-    for (int i = 0; i < 4; ++i)
+    if (g_preview_mode) g_tool = TOOL_HAND;
+    else if (!click_available && g_tool == TOOL_CLICK) g_tool = TOOL_SELECT;
+    for (int i = 0; i < 4; ++i) {
+        BOOL available = g_preview_mode ? i == TOOL_HAND :
+                         i != TOOL_CLICK || click_available;
+        EnableWindow(g_tool_buttons[i], available);
         SendMessageW(g_tool_buttons[i], BM_SETCHECK, i == (int)g_tool ? BST_CHECKED : BST_UNCHECKED, 0);
+    }
 }
 
 static void zoom_by(double factor) {
