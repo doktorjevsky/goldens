@@ -97,6 +97,7 @@ static HWND g_editor_tooltip, g_tool_tooltip;
 static HWND g_left_splitter, g_right_splitter;
 static HWND g_context_label;
 static HWND g_tool_buttons[4], g_view_buttons[GOLDEN_VIEW_BUTTON_COUNT], g_window_buttons[2];
+static HMENU g_capture_menu;
 static TOOLINFOW g_tool_button_tooltips[4];
 static IWICImagingFactory *g_wic;
 static wchar_t g_root[MAX_PATH * 4];
@@ -161,6 +162,7 @@ static void refresh_annotation_tree(void);
 static void update_context_label(void);
 static void zoom_by(double factor);
 static void update_tool_availability(void);
+static void update_capture_availability(void);
 static void set_tool_with_focus(ToolMode tool, BOOL focus_editor);
 static void set_tool(ToolMode tool);
 static void layout_children(HWND hwnd);
@@ -661,6 +663,7 @@ static void refresh_resources(void) {
     }
     g_rebuilding_resources = FALSE;
     refresh_annotation_tree();
+    update_capture_availability();
 }
 
 static void remember_root(void) {
@@ -757,6 +760,7 @@ static BOOL load_resource(const wchar_t *path) {
     load_annotations(path);
     update_tool_availability();
     refresh_annotation_tree();
+    update_capture_availability();
     update_context_label();
     InvalidateRect(g_editor, NULL, FALSE);
     wchar_t title[MAX_PATH * 4 + 32];
@@ -1181,15 +1185,18 @@ static void refresh_windows(void) {
             if ((HWND)g_window_items[i].id == g_preview_target) { found = TRUE; break; }
         if (!found) { clear_preview(); InvalidateRect(g_editor, NULL, FALSE); }
     }
+    update_capture_availability();
 }
 
 static HWND selected_capture_window(void) {
+    if (!g_windows) return NULL;
     HTREEITEM selected = TreeView_GetSelection(g_windows);
     if (!selected) return NULL;
     TVITEMW item = {0};
     item.mask = TVIF_PARAM; item.hItem = selected;
-    TreeView_GetItem(g_windows, &item);
-    return (HWND)item.lParam;
+    if (!TreeView_GetItem(g_windows, &item) || !item.lParam) return NULL;
+    HWND target = (HWND)item.lParam;
+    return IsWindow(target) ? target : NULL;
 }
 
 static HWND clicked_capture_window(void) {
@@ -1218,6 +1225,7 @@ static ResourceTreeNode *clicked_resource_node(void) {
 }
 
 static ResourceTreeNode *selected_active_resource_node(void) {
+    if (!g_tree || !g_image_path[0]) return NULL;
     ResourceTreeNode *node = tree_node_data(TreeView_GetSelection(g_tree));
     if (!node) return NULL;
     if (node->kind == RESOURCE_PNG)
@@ -1225,6 +1233,20 @@ static ResourceTreeNode *selected_active_resource_node(void) {
     if (node->kind == RESOURCE_ANNOTATION && node->annotation_index >= 0 &&
         node->annotation_index < g_annotation_count) return node;
     return NULL;
+}
+
+static void update_capture_availability(void) {
+    BOOL window_selected = selected_capture_window() != NULL;
+    BOOL resource_selected = selected_active_resource_node() != NULL;
+    if (g_window_buttons[0]) EnableWindow(g_window_buttons[0], window_selected);
+    if (g_window_buttons[1])
+        EnableWindow(g_window_buttons[1], window_selected && resource_selected);
+    if (g_capture_menu) {
+        EnableMenuItem(g_capture_menu, ID_CAPTURE, MF_BYCOMMAND |
+            (window_selected ? MF_ENABLED : MF_GRAYED));
+        EnableMenuItem(g_capture_menu, ID_RECAPTURE, MF_BYCOMMAND |
+            (window_selected && resource_selected ? MF_ENABLED : MF_GRAYED));
+    }
 }
 
 static void clear_tree_selection_on_blank_click(HWND tree) {
@@ -1476,7 +1498,10 @@ static void capture_new(void) {
 static void recapture_current(void) {
     HWND target = selected_capture_window();
     if (!target) { show_error(L"Select a window in the right column first."); return; }
-    if (!g_image_path[0]) { show_error(L"Select an existing PNG to recapture."); return; }
+    if (!selected_active_resource_node()) {
+        show_error(L"Select an existing PNG resource to recapture.");
+        return;
+    }
     if (MessageBoxW(g_main, L"Replace the current PNG while preserving its annotations?",
                     APP_NAME, MB_OKCANCEL | MB_ICONQUESTION) != IDOK) return;
     if (capture_window_to(target, g_image_path)) {
@@ -1703,6 +1728,13 @@ static void layout_children(HWND hwnd) {
 }
 
 static void set_tool_with_focus(ToolMode tool, BOOL focus_editor) {
+    BOOL preview_available = g_preview_mode && selected_capture_window();
+    BOOL resource_available = g_resource_visible &&
+                              selected_active_resource_node() != NULL;
+    if (!preview_available && !resource_available) {
+        update_tool_availability();
+        return;
+    }
     if (g_preview_mode && tool != TOOL_HAND) return;
     if (tool == TOOL_CLICK && (g_preview_mode || g_selected < 0 ||
                                g_selected >= g_annotation_count)) {
@@ -1720,13 +1752,17 @@ static void set_tool(ToolMode tool) {
 
 static void update_tool_availability(void) {
     if (!g_tool_buttons[0]) return;
-    BOOL click_available = !g_preview_mode && g_selected >= 0 &&
+    BOOL window_selected = selected_capture_window() != NULL;
+    BOOL resource_selected = g_resource_visible &&
+                             selected_active_resource_node() != NULL;
+    BOOL preview_available = g_preview_mode && window_selected;
+    BOOL click_available = resource_selected && !g_preview_mode && g_selected >= 0 &&
                            g_selected < g_annotation_count;
-    if (g_preview_mode) g_tool = TOOL_HAND;
+    if (preview_available) g_tool = TOOL_HAND;
     else if (!click_available && g_tool == TOOL_CLICK) g_tool = TOOL_SELECT;
     for (int i = 0; i < 4; ++i) {
-        BOOL available = g_preview_mode ? i == TOOL_HAND :
-                         i != TOOL_CLICK || click_available;
+        BOOL available = preview_available ? i == TOOL_HAND :
+                         resource_selected && (i != TOOL_CLICK || click_available);
         EnableWindow(g_tool_buttons[i], available);
         InvalidateRect(g_tool_buttons[i], NULL, FALSE);
     }
@@ -1800,6 +1836,7 @@ static HMENU create_main_menu(void) {
     AppendMenuW(view, MF_STRING, ID_REFRESH, L"Rescan Resource Folder\tF5");
     AppendMenuW(capture, MF_STRING, ID_CAPTURE, L"New Capture…");
     AppendMenuW(capture, MF_STRING, ID_RECAPTURE, L"Recapture Current Resource");
+    g_capture_menu = capture;
     AppendMenuW(bar, MF_POPUP, (UINT_PTR)file, L"File");
     AppendMenuW(bar, MF_POPUP, (UINT_PTR)edit, L"Edit");
     AppendMenuW(bar, MF_POPUP, (UINT_PTR)view, L"View");
@@ -1926,6 +1963,7 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         update_status();
         refresh_windows();
+        update_capture_availability();
         SetTimer(hwnd, WINDOW_TIMER, 750, NULL);
         SetTimer(hwnd, PREVIEW_TIMER, PREVIEW_INTERVAL_MS, NULL);
         return 0;
@@ -2000,6 +2038,8 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             g_rebuilding_resources = FALSE;
             g_pending_resource_selection[0] = 0;
         }
+        update_capture_availability();
+        update_tool_availability();
         return 0;
     }
     case WM_ANNOTATION_RENAMED:
@@ -2065,6 +2105,8 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     }
                 }
             }
+            update_capture_availability();
+            update_tool_availability();
         }
         if (header->idFrom == ID_WINDOWS && header->code == TVN_SELCHANGEDW && !g_rebuilding_windows) {
             HWND target = selected_capture_window();
@@ -2078,6 +2120,8 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     InvalidateRect(g_editor, NULL, FALSE);
                 }
             }
+            update_capture_availability();
+            update_tool_availability();
         }
         if (header->idFrom == ID_WINDOWS && header->code == NM_CLICK) {
             HWND target = clicked_capture_window();

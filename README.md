@@ -69,6 +69,8 @@ destination to the corresponding directory.
   asynchronous bitmap preview in the center, then use **Capture** or
   **Recapture** beside the window list. Preview mode selects **Hand** and
   disables the annotation tools until an editable resource is selected again.
+  Capture is available only for a selected window; Recapture additionally
+  requires a selected PNG or one of its annotations.
   Open, closed, minimized, and renamed windows are reconciled automatically.
 - The contextual strip says either **Editing resource** or **Previewing
   window**; generic panel-title rows have been removed.
