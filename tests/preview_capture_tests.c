@@ -42,6 +42,18 @@ static BOOL render_test_preview(HWND window, HDC destination, const RECT *bounds
     return TRUE;
 }
 
+static BOOL fail_preview(HWND window, HDC destination, const RECT *bounds,
+                         BYTE *pixels, int width, int height, void *context) {
+    UNREFERENCED_PARAMETER(window);
+    UNREFERENCED_PARAMETER(destination);
+    UNREFERENCED_PARAMETER(bounds);
+    UNREFERENCED_PARAMETER(pixels);
+    UNREFERENCED_PARAMETER(width);
+    UNREFERENCED_PARAMETER(height);
+    UNREFERENCED_PARAMETER(context);
+    return FALSE;
+}
+
 int main(void) {
     HINSTANCE instance = GetModuleHandleW(NULL);
     WNDCLASSW klass = {0};
@@ -75,6 +87,33 @@ int main(void) {
         }
     }
     golden_image_free(&image);
+
+    GoldenPreviewSurface surface = {0};
+    if (!failed && !golden_preview_surface_capture_with_renderer(
+            &surface, window, render_test_preview, NULL)) failed = 1;
+    HBITMAP first_bitmap = surface.bitmap;
+    BYTE *first_pixels = surface.pixels;
+    UINT first_width = surface.width, first_height = surface.height;
+    if (!failed && !golden_preview_surface_capture_with_renderer(
+            &surface, window, render_test_preview, NULL)) failed = 1;
+    if (!failed && (surface.bitmap != first_bitmap ||
+                    surface.pixels != first_pixels ||
+                    surface.width != first_width ||
+                    surface.height != first_height)) failed = 1;
+    GoldenImage view = golden_preview_surface_image(&surface);
+    if (!failed && (view.pixels != surface.pixels || view.width != surface.width ||
+                    view.height != surface.height || view.stride != surface.stride)) failed = 1;
+    if (!failed && golden_preview_surface_capture_with_renderer(
+            &surface, window, fail_preview, NULL)) failed = 1;
+    if (!failed && (surface.bitmap != first_bitmap || surface.pixels != first_pixels)) failed = 1;
+    SetWindowPos(window, NULL, 0, 0, 480, 320, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+    if (!failed && !golden_preview_surface_capture_with_renderer(
+            &surface, window, render_test_preview, NULL)) failed = 1;
+    if (!failed && (surface.width == first_width || surface.height == first_height)) failed = 1;
+    golden_preview_surface_release(&surface);
+    if (surface.memory || surface.bitmap || surface.pixels ||
+        surface.width || surface.height || surface.stride) failed = 1;
+
     DestroyWindow(window);
     UnregisterClassW(klass.lpszClassName, instance);
     if (failed) return 1;
