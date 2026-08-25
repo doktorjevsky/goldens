@@ -160,6 +160,8 @@ BOOL golden_preview_surface_capture_with_renderer(
         !prepare_surface(surface, width, height)) return FALSE;
     if (!renderer(window, surface->memory, &window_bounds, surface->pixels,
                   width, height, context)) return FALSE;
+    golden_bgra_force_opaque(surface->pixels, (UINT)width, (UINT)height,
+                             (UINT)width * 4u);
     crop_surface(surface, &source, width);
     return TRUE;
 }

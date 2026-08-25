@@ -112,10 +112,13 @@ exact 1:1 GDI rendering, overlay ordering, custom and collapsed column layouts
 from compact to wide and 100–200% DPI, version-compatible native tooltip
 registration and positioning, DPI-scaled tool icon rasterization, transactional
 PNG/JSON renames including rollback failure, atomic-write failure preservation,
-lossless BGRA PNG encode/decode and replacement, reusable preview capture
+lossless BGRA PNG encode/decode and replacement, and reusable preview capture
 surfaces with removal of invisible resize-border pixels from `PrintWindow`
-frames, latest-request coalescing, stale-result rejection, persistent-worker
-reuse, failure recovery, and bounded preview shutdown.
+frames. PNG coverage includes all 161 valid PngSuite images, comparison with the
+independent LodePNG decoder, encoded signature/chunk-order/CRC validation,
+padded-stride and malformed-input cases, and exact lossless BGRA/alpha fidelity.
+Preview coverage includes latest-request coalescing, stale-result rejection,
+persistent-worker reuse, failure recovery, and bounded preview shutdown.
 
 Run `install-hooks.bat` once after cloning. It configures the versioned
 `.githooks` directory. Both pre-commit and pre-push run the complete Windows

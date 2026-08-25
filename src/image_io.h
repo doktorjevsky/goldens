@@ -14,6 +14,7 @@ typedef struct {
 BOOL golden_png_load(IWICImagingFactory *factory, const wchar_t *path, GoldenImage *image);
 BOOL golden_png_save(IWICImagingFactory *factory, const wchar_t *path,
                      const BYTE *pixels, UINT width, UINT height, UINT stride);
+void golden_bgra_force_opaque(BYTE *pixels, UINT width, UINT height, UINT stride);
 void golden_image_free(GoldenImage *image);
 
 #endif

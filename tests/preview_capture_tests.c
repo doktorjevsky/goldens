@@ -68,7 +68,7 @@ static int pixel_is_test_blue(const GoldenImage *image, UINT x, UINT y) {
     const BYTE *pixel = image->pixels + (size_t)y * image->stride + (size_t)x * 4;
     return pixel[0] >= 185 && pixel[0] <= 220 &&
            pixel[1] >= 105 && pixel[1] <= 135 &&
-           pixel[2] >= 20 && pixel[2] <= 45;
+           pixel[2] >= 20 && pixel[2] <= 45 && pixel[3] == 255;
 }
 
 static int image_edges_are_test_blue(const GoldenImage *image) {

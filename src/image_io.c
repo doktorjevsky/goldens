@@ -11,6 +11,14 @@ void golden_image_free(GoldenImage *image) {
     *image = (GoldenImage){0};
 }
 
+void golden_bgra_force_opaque(BYTE *pixels, UINT width, UINT height, UINT stride) {
+    if (!pixels || !width || !height || width > UINT32_MAX / 4 || stride < width * 4) return;
+    for (UINT y = 0; y < height; ++y) {
+        BYTE *row = pixels + (size_t)y * stride;
+        for (UINT x = 0; x < width; ++x) row[(size_t)x * 4 + 3] = 255;
+    }
+}
+
 BOOL golden_png_load(IWICImagingFactory *factory, const wchar_t *path, GoldenImage *image) {
     if (!factory || !path || !image) return FALSE;
     IWICBitmapDecoder *decoder = NULL;
@@ -19,6 +27,10 @@ BOOL golden_png_load(IWICImagingFactory *factory, const wchar_t *path, GoldenIma
     GoldenImage loaded = {0};
     HRESULT hr = IWICImagingFactory_CreateDecoderFromFilename(factory, path, NULL,
         GENERIC_READ, WICDecodeMetadataCacheOnLoad, &decoder);
+    GUID container = {0};
+    if (SUCCEEDED(hr)) hr = IWICBitmapDecoder_GetContainerFormat(decoder, &container);
+    if (SUCCEEDED(hr) && !IsEqualGUID(&container, &GUID_ContainerFormatPng))
+        hr = WINCODEC_ERR_BADIMAGE;
     if (SUCCEEDED(hr)) hr = IWICBitmapDecoder_GetFrame(decoder, 0, &frame);
     if (SUCCEEDED(hr)) hr = IWICBitmapFrameDecode_GetSize(frame, &loaded.width, &loaded.height);
     if (SUCCEEDED(hr)) hr = IWICImagingFactory_CreateFormatConverter(factory, &converter);
@@ -78,6 +90,7 @@ static BOOL png_write(const wchar_t *path, void *opaque) {
         frame, context->width, context->height);
     WICPixelFormatGUID format = GUID_WICPixelFormat32bppBGRA;
     if (SUCCEEDED(hr)) hr = IWICBitmapFrameEncode_SetPixelFormat(frame, &format);
+    if (SUCCEEDED(hr) && !IsEqualGUID(&format, &GUID_WICPixelFormat32bppBGRA)) hr = E_FAIL;
     if (SUCCEEDED(hr)) hr = IWICBitmapFrameEncode_WritePixels(
         frame, context->height, context->stride,
         context->stride * context->height, (BYTE *)context->pixels);
