@@ -85,6 +85,11 @@ See [`examples/calculator.py`](examples/calculator.py) for a complete script tha
 starts Calculator, loads `calculator.png` and its JSON sidecar, and exercises
 every digit and arithmetic-operation target.
 
+[`examples/calculator_not_found.py`](examples/calculator_not_found.py) changes
+Calculator's display and then demonstrates the structured diagnostics returned
+by `TargetNotFoundError` when the original visual state does not reappear before
+the timeout.
+
 ## Tests
 
 The platform-independent matching and value-behaviour tests run on any system
