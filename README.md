@@ -48,9 +48,10 @@ destination to the corresponding directory.
   rendered at the current DPI and tinted for each button state; native hover
   tooltips and accessible button names remain available. Select moves
   annotations and resizes from the lower-right handle.
-  Rectangle draws a new boundary and immediately asks for its unique name.
-  After a successful creation Goldens returns to Select. Click is disabled until
-  an annotation is selected and only accepts points inside that annotation.
+  Rectangle draws a new boundary, assigns it a unique default name, and opens
+  that name for immediate in-place editing in the resource tree. Rectangle stays
+  active after creation so several boundaries can be drawn in sequence. Click is
+  disabled until an annotation is selected and only accepts points inside it.
   While drawing, a high-opacity orange tint and thick yellow outline keep the
   new boundary visible over both dark and light images.
   Click assigns a normalized click point to the annotation under the cursor.

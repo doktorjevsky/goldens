@@ -1102,19 +1102,16 @@ static LRESULT CALLBACK EditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             g_drawing = FALSE;
             RECT r = golden_normalize_rect(g_draw_start, g_draw_current);
             if (r.right - r.left >= 2 && r.bottom - r.top >= 2) {
-                wchar_t name[128];
-                make_unique_name(name, _countof(name));
-                if (prompt_annotation_name(name, _countof(name), -1)) {
-                    push_undo();
-                    Annotation *a = &g_annotations[g_annotation_count];
-                    ZeroMemory(a, sizeof(*a));
-                    wcscpy(a->name, name);
-                    a->boundary = r;
-                    g_selected = g_annotation_count++;
-                    g_dirty = TRUE;
-                    refresh_annotation_tree();
-                    set_tool(TOOL_SELECT);
-                }
+                push_undo();
+                Annotation *a = &g_annotations[g_annotation_count];
+                ZeroMemory(a, sizeof(*a));
+                make_unique_name(a->name, _countof(a->name));
+                a->boundary = r;
+                g_selected = g_annotation_count++;
+                g_dirty = TRUE;
+                refresh_annotation_tree();
+                HTREEITEM item = find_annotation_item(g_selected);
+                if (item) PostMessageW(g_main, WM_BEGIN_TREE_RENAME, 0, (LPARAM)item);
             }
             InvalidateRect(hwnd, NULL, FALSE);
         }
@@ -1451,8 +1448,11 @@ static BOOL begin_tree_rename(HTREEITEM item) {
     }
     TreeView_SelectItem(g_tree, item);
     HWND edit = TreeView_EditLabel(g_tree, item);
-    if (edit) SendMessageW(edit, EM_LIMITTEXT,
-        node->kind == RESOURCE_ANNOTATION ? 127 : 255, 0);
+    if (edit) {
+        SendMessageW(edit, EM_LIMITTEXT,
+            node->kind == RESOURCE_ANNOTATION ? 127 : 255, 0);
+        SendMessageW(edit, EM_SETSEL, 0, -1);
+    }
     return edit != NULL;
 }
 
