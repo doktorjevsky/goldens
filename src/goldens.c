@@ -1367,8 +1367,10 @@ static BOOL capture_window_to(HWND target, const wchar_t *path) {
         HBITMAP bitmap = CreateDIBSection(screen, &info, DIB_RGB_COLORS, (void **)&bits, NULL, 0);
         if (bitmap && memory && bits) {
             HGDIOBJ old = SelectObject(memory, bitmap);
-            if (BitBlt(memory, 0, 0, width, height, screen, rect.left, rect.top, SRCCOPY | CAPTUREBLT))
+            if (BitBlt(memory, 0, 0, width, height, screen, rect.left, rect.top, SRCCOPY | CAPTUREBLT)) {
+                golden_bgra_force_opaque(bits, (UINT)width, (UINT)height, (UINT)width * 4);
                 ok = save_png_pixels(path, bits, width, height, width * 4);
+            }
             SelectObject(memory, old);
         }
         if (bitmap) DeleteObject(bitmap);

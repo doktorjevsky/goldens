@@ -56,7 +56,9 @@ build\resource_ops_tests.exe
 if errorlevel 1 exit /b 1
 
 %CC% -std=c17 -O2 -Wall -Wextra -DUNICODE -D_UNICODE -DCOBJMACROS -municode ^
-  tests\png_io_tests.c src\image_io.c -o build\png_io_tests.exe ^
+  -DLODEPNG_NO_COMPILE_ENCODER -DLODEPNG_NO_COMPILE_DISK ^
+  tests\png_io_tests.c tests\third_party\lodepng\lodepng.c src\image_io.c ^
+  -o build\png_io_tests.exe ^
   -lole32 -luuid -lwindowscodecs
 if errorlevel 1 exit /b 1
 build\png_io_tests.exe

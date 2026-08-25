@@ -9,6 +9,14 @@ void golden_image_free(GoldenImage *image) {
     *image = (GoldenImage){0};
 }
 
+void golden_bgra_force_opaque(BYTE *pixels, UINT width, UINT height, UINT stride) {
+    if (!pixels || !width || !height || width > UINT32_MAX / 4 || stride < width * 4) return;
+    for (UINT y = 0; y < height; ++y) {
+        BYTE *row = pixels + (size_t)y * stride;
+        for (UINT x = 0; x < width; ++x) row[(size_t)x * 4 + 3] = 255;
+    }
+}
+
 BOOL golden_png_load(IWICImagingFactory *factory, const wchar_t *path, GoldenImage *image) {
     if (!factory || !path || !image) return FALSE;
     IWICBitmapDecoder *decoder = NULL;
@@ -17,6 +25,10 @@ BOOL golden_png_load(IWICImagingFactory *factory, const wchar_t *path, GoldenIma
     GoldenImage loaded = {0};
     HRESULT hr = IWICImagingFactory_CreateDecoderFromFilename(factory, path, NULL,
         GENERIC_READ, WICDecodeMetadataCacheOnLoad, &decoder);
+    GUID container = {0};
+    if (SUCCEEDED(hr)) hr = IWICBitmapDecoder_GetContainerFormat(decoder, &container);
+    if (SUCCEEDED(hr) && !IsEqualGUID(&container, &GUID_ContainerFormatPng))
+        hr = WINCODEC_ERR_BADIMAGE;
     if (SUCCEEDED(hr)) hr = IWICBitmapDecoder_GetFrame(decoder, 0, &frame);
     if (SUCCEEDED(hr)) hr = IWICBitmapFrameDecode_GetSize(frame, &loaded.width, &loaded.height);
     if (SUCCEEDED(hr)) hr = IWICImagingFactory_CreateFormatConverter(factory, &converter);
@@ -24,15 +36,17 @@ BOOL golden_png_load(IWICImagingFactory *factory, const wchar_t *path, GoldenIma
         (IWICBitmapSource *)frame, &GUID_WICPixelFormat32bppBGRA,
         WICBitmapDitherTypeNone, NULL, 0.0, WICBitmapPaletteTypeCustom);
     if (SUCCEEDED(hr)) {
-        size_t stride = (size_t)loaded.width * 4;
-        size_t bytes = stride * loaded.height;
-        if (!loaded.width || !loaded.height || bytes > UINT32_MAX) hr = E_FAIL;
+        if (!loaded.width || !loaded.height || loaded.width > UINT32_MAX / 4) hr = E_FAIL;
         else {
-            loaded.stride = (UINT)stride;
-            loaded.pixels = (BYTE *)malloc(bytes);
-            if (!loaded.pixels) hr = E_OUTOFMEMORY;
-            else hr = IWICFormatConverter_CopyPixels(converter, NULL, loaded.stride,
-                                                      (UINT)bytes, loaded.pixels);
+            loaded.stride = loaded.width * 4;
+            if (loaded.height > UINT32_MAX / loaded.stride) hr = E_FAIL;
+            else {
+                UINT bytes = loaded.stride * loaded.height;
+                loaded.pixels = (BYTE *)malloc(bytes);
+                if (!loaded.pixels) hr = E_OUTOFMEMORY;
+                else hr = IWICFormatConverter_CopyPixels(converter, NULL, loaded.stride,
+                                                          bytes, loaded.pixels);
+            }
         }
     }
     if (converter) IWICFormatConverter_Release(converter);
@@ -46,7 +60,9 @@ BOOL golden_png_load(IWICImagingFactory *factory, const wchar_t *path, GoldenIma
 
 BOOL golden_png_save(IWICImagingFactory *factory, const wchar_t *path,
                      const BYTE *pixels, UINT width, UINT height, UINT stride) {
-    if (!factory || !path || !pixels || !width || !height || stride < width * 4) return FALSE;
+    if (!factory || !path || !pixels || !width || !height || width > UINT32_MAX / 4)
+        return FALSE;
+    if (stride < width * 4 || height > UINT32_MAX / stride) return FALSE;
     IWICStream *stream = NULL;
     IWICBitmapEncoder *encoder = NULL;
     IWICBitmapFrameEncode *frame = NULL;
@@ -62,6 +78,7 @@ BOOL golden_png_save(IWICImagingFactory *factory, const wchar_t *path,
     if (SUCCEEDED(hr)) hr = IWICBitmapFrameEncode_SetSize(frame, width, height);
     WICPixelFormatGUID format = GUID_WICPixelFormat32bppBGRA;
     if (SUCCEEDED(hr)) hr = IWICBitmapFrameEncode_SetPixelFormat(frame, &format);
+    if (SUCCEEDED(hr) && !IsEqualGUID(&format, &GUID_WICPixelFormat32bppBGRA)) hr = E_FAIL;
     if (SUCCEEDED(hr)) hr = IWICBitmapFrameEncode_WritePixels(frame, height, stride,
                                                                stride * height, (BYTE *)pixels);
     if (SUCCEEDED(hr)) hr = IWICBitmapFrameEncode_Commit(frame);

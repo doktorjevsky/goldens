@@ -69,7 +69,9 @@ int main(void) {
             BYTE blue = image.pixels[center + 0];
             BYTE green = image.pixels[center + 1];
             BYTE red = image.pixels[center + 2];
-            failed = red < 20 || red > 45 || green < 105 || green > 135 || blue < 185 || blue > 220;
+            BYTE alpha = image.pixels[center + 3];
+            failed = red < 20 || red > 45 || green < 105 || green > 135 ||
+                     blue < 185 || blue > 220 || alpha != 255;
             if (failed) fprintf(stderr, "unexpected center BGRA: %u %u %u %u\n",
                                 blue, green, red, image.pixels[center + 3]);
         }

@@ -97,8 +97,10 @@ live top-level window lifecycle reconciliation (including minimized windows),
 exact 1:1 GDI rendering, overlay ordering, custom and collapsed column layouts
 from compact to wide and 100–200% DPI, version-compatible native tooltip
 registration and positioning, DPI-scaled tool icon rasterization, transactional
-PNG/JSON renames with post-rename saves, lossless BGRA PNG encode/decode, and
-the window-preview allocation/copy pipeline.
+PNG/JSON renames with post-rename saves, and the window-preview allocation/copy
+pipeline. PNG coverage includes all 161 valid PngSuite images, comparison with
+the independent LodePNG decoder, encoded signature/chunk-order/CRC validation,
+padded-stride and malformed-input cases, and exact lossless BGRA/alpha fidelity.
 
 Run `install-hooks.bat` once after cloning. It configures the versioned
 `.githooks` directory. Both pre-commit and pre-push run the complete Windows

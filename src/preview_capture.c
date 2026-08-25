@@ -70,6 +70,7 @@ BOOL golden_capture_window_preview_with_renderer(HWND window, GoldenImage *image
         HGDIOBJ previous = SelectObject(memory, bitmap);
         rendered = renderer(window, memory, &bounds, dib_pixels, width, height, context);
         if (rendered) {
+            golden_bgra_force_opaque(dib_pixels, (UINT)width, (UINT)height, (UINT)width * 4);
             size_t bytes = (size_t)width * (size_t)height * 4;
             image->pixels = (BYTE *)malloc(bytes);
             if (image->pixels) {
