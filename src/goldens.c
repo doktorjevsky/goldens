@@ -44,7 +44,7 @@ enum {
     ID_OPEN = 100, ID_SAVE, ID_EXIT, ID_UNDO, ID_REDO, ID_RENAME, ID_DELETE,
     ID_CLEAR_CLICK, ID_FIT, ID_ZOOM_OUT, ID_ZOOM_IN, ID_ACTUAL,
     ID_CAPTURE, ID_RECAPTURE, ID_REFRESH,
-    ID_TOOL_SELECT, ID_TOOL_RECTANGLE, ID_TOOL_CLICK, ID_TOOL_HAND,
+    ID_TOOL_SELECT, ID_TOOL_RECTANGLE, ID_TOOL_CLICK,
     ID_TREE = 200, ID_EDITOR, ID_WINDOWS, ID_SPLITTER_LEFT, ID_SPLITTER_RIGHT,
     ID_PROMPT_EDIT = 300, ID_PROMPT_OK, ID_PROMPT_CANCEL
 };
@@ -52,8 +52,7 @@ enum {
 typedef enum {
     TOOL_SELECT,
     TOOL_RECTANGLE,
-    TOOL_CLICK,
-    TOOL_HAND
+    TOOL_CLICK
 } ToolMode;
 
 typedef enum {
@@ -88,9 +87,10 @@ static HWND g_main, g_tree, g_editor, g_windows, g_status;
 static HWND g_editor_tooltip, g_tool_tooltip;
 static HWND g_left_splitter, g_right_splitter;
 static HWND g_context_label;
-static HWND g_tool_buttons[4], g_view_buttons[GOLDEN_VIEW_BUTTON_COUNT], g_window_buttons[2];
+static HWND g_tool_buttons[GOLDEN_TOOL_BUTTON_COUNT];
+static HWND g_view_buttons[GOLDEN_VIEW_BUTTON_COUNT], g_window_buttons[2];
 static HMENU g_capture_menu;
-static TOOLINFOW g_tool_button_tooltips[4];
+static TOOLINFOW g_tool_button_tooltips[GOLDEN_TOOL_BUTTON_COUNT];
 static IWICImagingFactory *g_wic;
 static wchar_t g_root[MAX_PATH * 4];
 static wchar_t g_image_path[MAX_PATH * 4];
@@ -125,7 +125,6 @@ static RECT g_drag_original;
 static BOOL g_drawing;
 static POINT g_draw_start, g_draw_current;
 static ToolMode g_tool = TOOL_SELECT;
-static ToolMode g_tool_before_preview = TOOL_SELECT;
 static GoldenWindowInfo g_window_items[MAX_WINDOWS];
 static int g_window_count;
 static BOOL g_rebuilding_windows;
@@ -157,7 +156,7 @@ static void request_preview_frame(void);
 static HWND selected_capture_window(void);
 static void refresh_annotation_tree(void);
 static void update_context_label(void);
-static void zoom_by(double factor);
+static void zoom_by(double factor, const POINT *anchor);
 static void update_tool_availability(void);
 static void update_capture_availability(void);
 static void set_tool_with_focus(ToolMode tool, BOOL focus_editor);
@@ -384,7 +383,6 @@ static void clear_image(void) {
 }
 
 static void clear_preview(void) {
-    BOOL was_previewing = g_preview_mode;
     InterlockedIncrement(&g_preview_generation);
     golden_preview_service_clear(&g_preview_service);
     g_preview_image = (GoldenImage){0};
@@ -393,7 +391,6 @@ static void clear_preview(void) {
     g_preview_mode = FALSE;
     g_preview_loading = FALSE;
     ++g_image_revision;
-    if (was_previewing) g_tool = g_tool_before_preview;
     update_context_label();
     update_tool_availability();
 }
@@ -980,26 +977,33 @@ static void deselect_annotation(void) {
     InvalidateRect(g_editor, NULL, FALSE);
 }
 
+static void set_editor_cursor(void) {
+    LPCWSTR cursor = g_drag_mode == 2 ? IDC_SIZENWSE :
+                     g_panning || g_drag_mode == 1 ? IDC_SIZEALL :
+                     g_preview_mode || g_tool == TOOL_SELECT ? IDC_ARROW :
+                     IDC_CROSS;
+    SetCursor(LoadCursorW(NULL, cursor));
+}
+
 static LRESULT CALLBACK EditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
     case WM_PAINT: paint_editor(hwnd); return 0;
     case WM_ERASEBKGND: return 1;
     case WM_SETCURSOR:
         if (LOWORD(lp) == HTCLIENT) {
-            LPCWSTR cursor = g_tool == TOOL_HAND || g_preview_mode ? IDC_SIZEALL :
-                             g_tool == TOOL_SELECT ? IDC_ARROW : IDC_CROSS;
-            SetCursor(LoadCursorW(NULL, cursor));
+            set_editor_cursor();
             return TRUE;
         }
         break;
     case WM_LBUTTONDOWN: {
         hide_annotation_tooltip(hwnd);
         SetFocus(hwnd);
-        if (g_preview_mode || g_tool == TOOL_HAND) {
+        if (g_preview_mode) {
             g_panning = TRUE;
             g_pan_start = (POINT){GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
             g_pan_origin_x = g_pan_x; g_pan_origin_y = g_pan_y;
             SetCapture(hwnd);
+            set_editor_cursor();
             return 0;
         }
         POINT client = {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)}, image;
@@ -1040,8 +1044,15 @@ static LRESULT CALLBACK EditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 g_drag_original = g_annotations[hit].boundary;
                 push_undo();
                 SetCapture(hwnd);
+                set_editor_cursor();
             } else {
                 deselect_annotation();
+                g_panning = TRUE;
+                g_pan_start = client;
+                g_pan_origin_x = g_pan_x;
+                g_pan_origin_y = g_pan_y;
+                SetCapture(hwnd);
+                set_editor_cursor();
             }
         }
         InvalidateRect(hwnd, NULL, FALSE);
@@ -1096,6 +1107,7 @@ static LRESULT CALLBACK EditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (g_panning) {
             g_panning = FALSE;
             ReleaseCapture();
+            set_editor_cursor();
             if (g_preview_mode) request_preview_frame();
             InvalidateRect(hwnd, NULL, FALSE);
             return 0;
@@ -1103,6 +1115,7 @@ static LRESULT CALLBACK EditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (g_drag_mode) {
             g_drag_mode = 0;
             ReleaseCapture();
+            set_editor_cursor();
             InvalidateRect(hwnd, NULL, FALSE);
         } else if (g_drawing) {
             ReleaseCapture();
@@ -1128,16 +1141,20 @@ static LRESULT CALLBACK EditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         g_pan_start = (POINT){GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
         g_pan_origin_x = g_pan_x; g_pan_origin_y = g_pan_y;
         SetCapture(hwnd);
+        set_editor_cursor();
         return 0;
     case WM_MBUTTONUP:
         if (g_panning) {
             g_panning = FALSE;
             ReleaseCapture();
+            set_editor_cursor();
             if (g_preview_mode) request_preview_frame();
         }
         return 0;
     case WM_MOUSEWHEEL: {
-        zoom_by(GET_WHEEL_DELTA_WPARAM(wp) > 0 ? 1.25 : 0.8);
+        POINT anchor = {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
+        ScreenToClient(hwnd, &anchor);
+        zoom_by(GET_WHEEL_DELTA_WPARAM(wp) > 0 ? 1.25 : 0.8, &anchor);
         return 0;
     }
     case WM_LBUTTONDBLCLK:
@@ -1155,6 +1172,7 @@ static LRESULT CALLBACK EditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         g_panning = FALSE;
         g_drag_mode = 0;
         g_drawing = FALSE;
+        set_editor_cursor();
         return 0;
     case WM_NCDESTROY:
         golden_image_cache_release(&g_image_cache);
@@ -1313,7 +1331,6 @@ static void preview_window(HWND target) {
         return;
     }
     clear_preview();
-    g_tool_before_preview = g_tool;
     g_preview_target = target;
     GetWindowTextW(target, g_preview_title, _countof(g_preview_title));
     g_preview_mode = TRUE;
@@ -1626,7 +1643,8 @@ static LRESULT CALLBACK ToolButtonProc(HWND hwnd, UINT message, WPARAM wp,
         if (IsWindowEnabled(hwnd) && g_hovered_tool != index) {
             int previous = g_hovered_tool;
             g_hovered_tool = index;
-            if (previous >= 0 && previous < 4 && g_tool_buttons[previous])
+            if (previous >= 0 && previous < GOLDEN_TOOL_BUTTON_COUNT &&
+                g_tool_buttons[previous])
                 InvalidateRect(g_tool_buttons[previous], NULL, FALSE);
             InvalidateRect(hwnd, NULL, FALSE);
             TRACKMOUSEEVENT tracking = {sizeof(tracking), TME_LEAVE, hwnd, 0};
@@ -1651,7 +1669,7 @@ static LRESULT CALLBACK ToolButtonProc(HWND hwnd, UINT message, WPARAM wp,
 }
 
 static void draw_tool_button(const DRAWITEMSTRUCT *item) {
-    if (!item || item->CtlID < ID_TOOL_SELECT || item->CtlID > ID_TOOL_HAND)
+    if (!item || item->CtlID < ID_TOOL_SELECT || item->CtlID > ID_TOOL_CLICK)
         return;
     int index = (int)item->CtlID - ID_TOOL_SELECT;
     BOOL disabled = (item->itemState & ODS_DISABLED) != 0;
@@ -1730,7 +1748,8 @@ static void layout_children(HWND hwnd) {
         SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOREDRAW)
     PLACE_CONTROL(g_tree, layout.resource_tree);
     PLACE_CONTROL(g_left_splitter, layout.left_splitter);
-    for (int i = 0; i < 4; ++i) PLACE_CONTROL(g_tool_buttons[i], layout.tool_buttons[i]);
+    for (int i = 0; i < GOLDEN_TOOL_BUTTON_COUNT; ++i)
+        PLACE_CONTROL(g_tool_buttons[i], layout.tool_buttons[i]);
     PLACE_CONTROL(g_context_label, layout.context_label);
     PLACE_CONTROL(g_editor, layout.editor);
     for (int i = 0; i < GOLDEN_VIEW_BUTTON_COUNT; ++i)
@@ -1751,7 +1770,7 @@ static void set_tool_with_focus(ToolMode tool, BOOL focus_editor) {
         update_tool_availability();
         return;
     }
-    if (g_preview_mode && tool != TOOL_HAND) return;
+    if (g_preview_mode && tool != TOOL_SELECT) return;
     if (tool == TOOL_CLICK && (g_preview_mode || g_selected < 0 ||
                                g_selected >= g_annotation_count)) {
         MessageBeep(MB_ICONWARNING);
@@ -1774,23 +1793,36 @@ static void update_tool_availability(void) {
     BOOL preview_available = g_preview_mode && window_selected;
     BOOL click_available = resource_selected && !g_preview_mode && g_selected >= 0 &&
                            g_selected < g_annotation_count;
-    if (preview_available) g_tool = TOOL_HAND;
+    if (preview_available) g_tool = TOOL_SELECT;
     else if (!click_available && g_tool == TOOL_CLICK) g_tool = TOOL_SELECT;
-    for (int i = 0; i < 4; ++i) {
-        BOOL available = preview_available ? i == TOOL_HAND :
+    for (int i = 0; i < GOLDEN_TOOL_BUTTON_COUNT; ++i) {
+        BOOL available = preview_available ? i == TOOL_SELECT :
                          resource_selected && (i != TOOL_CLICK || click_available);
         EnableWindow(g_tool_buttons[i], available);
         InvalidateRect(g_tool_buttons[i], NULL, FALSE);
     }
 }
 
-static void zoom_by(double factor) {
+static void zoom_by(double factor, const POINT *anchor) {
     if (!active_pixels() || !active_width() || !active_height()) return;
-    RECT destination;
-    double current_scale;
-    image_layout(g_editor, &destination, &current_scale);
-    g_zoom = min(8.0, max(0.05, current_scale * factor));
-    g_pan_x = g_pan_y = 0;
+    RECT client;
+    GetClientRect(g_editor, &client);
+    GoldenViewport current = golden_compute_viewport(
+        (int)active_width(), (int)active_height(), client.right, client.bottom,
+        30, g_zoom, g_pan_x, g_pan_y);
+    double next_zoom = min(8.0, max(0.05, current.scale * factor));
+    if (next_zoom == current.scale) return;
+    POINT zoom_anchor = anchor ? *anchor : (POINT){
+        (current.destination.left + current.destination.right) / 2,
+        (current.destination.top + current.destination.bottom) / 2
+    };
+    GoldenViewport centered_zoom = golden_compute_viewport(
+        (int)active_width(), (int)active_height(), client.right, client.bottom,
+        30, next_zoom, 0, 0);
+    POINT pan = golden_zoom_anchor_pan(&current, &centered_zoom, zoom_anchor);
+    g_zoom = next_zoom;
+    g_pan_x = pan.x;
+    g_pan_y = pan.y;
     InvalidateRect(g_editor, NULL, FALSE);
 }
 
@@ -1811,8 +1843,8 @@ static void handle_command(int id) {
     case ID_DELETE: delete_selected(); break;
     case ID_CLEAR_CLICK: clear_click(); break;
     case ID_FIT: g_zoom = 0.0; g_pan_x = g_pan_y = 0; InvalidateRect(g_editor, NULL, FALSE); break;
-    case ID_ZOOM_OUT: zoom_by(0.8); break;
-    case ID_ZOOM_IN: zoom_by(1.25); break;
+    case ID_ZOOM_OUT: zoom_by(0.8, NULL); break;
+    case ID_ZOOM_IN: zoom_by(1.25, NULL); break;
     case ID_ACTUAL: g_zoom = 1.0; g_pan_x = g_pan_y = 0; InvalidateRect(g_editor, NULL, FALSE); break;
     case ID_CAPTURE: capture_new(); break;
     case ID_RECAPTURE: recapture_current(); break;
@@ -1824,7 +1856,6 @@ static void handle_command(int id) {
     case ID_TOOL_SELECT: set_tool(TOOL_SELECT); break;
     case ID_TOOL_RECTANGLE: set_tool(TOOL_RECTANGLE); break;
     case ID_TOOL_CLICK: set_tool(TOOL_CLICK); break;
-    case ID_TOOL_HAND: set_tool(TOOL_HAND); break;
     }
 }
 
@@ -1902,10 +1933,11 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             SS_LEFT | SS_CENTERIMAGE | SS_ENDELLIPSIS | SS_NOPREFIX,
             0, 0, 0, 0, hwnd, NULL, g_instance, NULL);
 
-        const wchar_t *tool_labels[] = {L"Select", L"Rectangle", L"Click", L"Hand"};
-        const wchar_t *tool_tips[] = {L"Select", L"Rectangle", L"Click point", L"Hand (pan)"};
-        const int tool_ids[] = {ID_TOOL_SELECT, ID_TOOL_RECTANGLE, ID_TOOL_CLICK, ID_TOOL_HAND};
-        for (int i = 0; i < 4; ++i) {
+        const wchar_t *tool_labels[] = {L"Select", L"Rectangle", L"Click"};
+        const wchar_t *tool_tips[] = {L"Select, move, resize, or pan",
+                                      L"Rectangle", L"Click point"};
+        const int tool_ids[] = {ID_TOOL_SELECT, ID_TOOL_RECTANGLE, ID_TOOL_CLICK};
+        for (int i = 0; i < GOLDEN_TOOL_BUTTON_COUNT; ++i) {
             DWORD style = WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW;
             if (!i) style |= WS_GROUP;
             g_tool_buttons[i] = CreateWindowW(L"BUTTON", tool_labels[i], style,
@@ -1922,7 +1954,7 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             SetWindowPos(g_tool_tooltip, HWND_TOPMOST, 0, 0, 0, 0,
                          SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
             SendMessageW(g_tool_tooltip, TTM_SETDELAYTIME, TTDT_INITIAL, 450);
-            for (int i = 0; i < 4; ++i) {
+            for (int i = 0; i < GOLDEN_TOOL_BUTTON_COUNT; ++i) {
                 TOOLINFOW *tool = &g_tool_button_tooltips[i];
                 ZeroMemory(tool, sizeof(*tool));
                 tool->cbSize = TTTOOLINFO_V1_SIZE;
@@ -2018,7 +2050,7 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     case WM_DRAWITEM: {
         DRAWITEMSTRUCT *item = (DRAWITEMSTRUCT *)lp;
-        if (item && item->CtlID >= ID_TOOL_SELECT && item->CtlID <= ID_TOOL_HAND) {
+        if (item && item->CtlID >= ID_TOOL_SELECT && item->CtlID <= ID_TOOL_CLICK) {
             draw_tool_button(item);
             return TRUE;
         }

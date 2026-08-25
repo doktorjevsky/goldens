@@ -148,9 +148,15 @@ static BOOL compare_bgra_to_rgba(const BYTE *bgra, UINT bgra_stride,
         for (UINT x = 0; x < width; ++x) {
             const BYTE *b = bgra_row + (size_t)x * 4;
             const BYTE *r = rgba_row + (size_t)x * 4;
-            if (abs((int)b[0] - r[2]) > (int)tolerance ||
-                abs((int)b[1] - r[1]) > (int)tolerance ||
-                abs((int)b[2] - r[0]) > (int)tolerance ||
+            /* RGB is not observable when both straight-alpha pixels are fully
+               transparent. WIC canonicalizes that hidden color to black while
+               other conforming decoders may preserve the encoded samples. */
+            BOOL hidden_rgb = b[3] == 0 && r[3] == 0;
+            BOOL color_mismatch = !hidden_rgb &&
+                (abs((int)b[0] - r[2]) > (int)tolerance ||
+                 abs((int)b[1] - r[1]) > (int)tolerance ||
+                 abs((int)b[2] - r[0]) > (int)tolerance);
+            if (color_mismatch ||
                 abs((int)b[3] - r[3]) > (int)tolerance) {
                 fwprintf(stderr, L"pixel mismatch in %ls at %u,%u\n", label, x, y);
                 return FALSE;

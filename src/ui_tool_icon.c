@@ -47,7 +47,7 @@ static BYTE scaled_mask_pixel(const unsigned char *mask, int source_size,
 void golden_draw_tool_icon(HDC dc, GoldenToolIcon icon, const RECT *bounds,
                            COLORREF color, UINT dpi) {
     if (!dc || !bounds || icon < GOLDEN_TOOL_ICON_SELECT ||
-        icon > GOLDEN_TOOL_ICON_HAND) return;
+        icon > GOLDEN_TOOL_ICON_CLICK) return;
     int width = bounds->right - bounds->left;
     int height = bounds->bottom - bounds->top;
     if (width <= 0 || height <= 0) return;

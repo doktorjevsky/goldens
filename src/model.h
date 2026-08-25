@@ -37,6 +37,9 @@ GoldenViewport golden_compute_viewport(int image_width, int image_height,
                                        int client_width, int client_height,
                                        int top_inset, double zoom,
                                        int pan_x, int pan_y);
+POINT golden_zoom_anchor_pan(const GoldenViewport *current,
+                             const GoldenViewport *centered_zoom,
+                             POINT client_anchor);
 BOOL golden_view_to_image(const GoldenViewport *viewport, POINT client,
                           int image_width, int image_height, POINT *image);
 BOOL golden_window_lists_equal(const GoldenWindowInfo *left, int left_count,

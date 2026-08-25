@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Rasterize the four checked-in Fluent SVG paths into C alpha masks."""
+"""Rasterize the checked-in Fluent SVG paths into C alpha masks."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from PIL import Image
 
 
 ROOT = Path(__file__).resolve().parents[1]
-ICONS = ("cursor", "rectangle", "target", "hand")
+ICONS = ("cursor", "rectangle", "target")
 TOKEN = re.compile(r"[A-Za-z]|[-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?")
 
 
@@ -150,7 +150,8 @@ def main() -> None:
     ]
     for size in (20, 40):
         output.append(
-            f"static const unsigned char golden_tool_icon_masks_{size}[4][{size * size}] = {{"
+            f"static const unsigned char golden_tool_icon_masks_{size}"
+            f"[{len(ICONS)}][{size * size}] = {{"
         )
         output.append(",\n".join(
             format_mask(name, size, masks[name][size]) for name in ICONS

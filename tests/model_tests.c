@@ -59,6 +59,23 @@ static void test_viewport_fidelity(void) {
     POINT client = {one.destination.left + 321, one.destination.top + 222};
     CHECK(golden_view_to_image(&one, client, 1920, 1080, &image));
     CHECK(image.x == 321 && image.y == 222);
+
+    GoldenViewport current = golden_compute_viewport(
+        1000, 800, 800, 600, 30, 0.5, 35, -20);
+    POINT anchor = {615, 185};
+    double anchored_image_x =
+        (anchor.x - current.destination.left) / current.scale;
+    double anchored_image_y =
+        (anchor.y - current.destination.top) / current.scale;
+    GoldenViewport centered_zoom = golden_compute_viewport(
+        1000, 800, 800, 600, 30, 1.0, 0, 0);
+    POINT pan = golden_zoom_anchor_pan(&current, &centered_zoom, anchor);
+    GoldenViewport zoomed = golden_compute_viewport(
+        1000, 800, 800, 600, 30, 1.0, pan.x, pan.y);
+    double zoomed_client_x = zoomed.destination.left + anchored_image_x * zoomed.scale;
+    double zoomed_client_y = zoomed.destination.top + anchored_image_y * zoomed.scale;
+    CHECK(fabs(zoomed_client_x - anchor.x) <= 0.5);
+    CHECK(fabs(zoomed_client_y - anchor.y) <= 0.5);
 }
 
 static void test_window_reconciliation(void) {

@@ -46,10 +46,12 @@ destination to the corresponding directory.
   application commands. These are deliberately separate from image tools.
 - The compact horizontal tool row above the editor uses the official Microsoft
   Fluent System Icons for
-  **Select**, **Rectangle**, **Click**, and **Hand**. Their antialiased masks are
+  **Select**, **Rectangle**, and **Click**. Their antialiased masks are
   rendered at the current DPI and tinted for each button state; native hover
   tooltips and accessible button names remain available. Select moves
-  annotations and resizes from the lower-right handle.
+  annotations, resizes from the lower-right handle, and pans when dragging the
+  image background. The arrow cursor changes to four-way arrows while moving an
+  annotation or panning, and to a diagonal resize cursor over an active resize.
   Rectangle draws a new boundary, assigns it a unique default name, and opens
   that name for immediate in-place editing in the resource tree. Rectangle stays
   active after creation so several boundaries can be drawn in sequence. Click is
@@ -57,7 +59,7 @@ destination to the corresponding directory.
   While drawing, a high-opacity orange tint and thick yellow outline keep the
   new boundary visible over both dark and light images.
   Click assigns a normalized click point to the annotation under the cursor.
-  Hand pans the canvas; middle-drag also pans from any tool.
+  Middle-drag also pans from any tool.
 - The resource tree expands the active PNG to show its annotations. Selection
   stays synchronized in both directions between the tree and editor. Boundary
   names appear as hover tooltips instead of labels over the image. Double-click
@@ -73,7 +75,7 @@ destination to the corresponding directory.
   are unsaved changes.
 - Select a window in the right column to start a continuously refreshed,
   asynchronous bitmap preview in the center, then use **Capture** or
-  **Recapture** beside the window list. Preview mode selects **Hand** and
+  **Recapture** beside the window list. Preview mode uses **Select** for panning and
   disables the annotation tools until an editable resource is selected again.
   A persistent worker coalesces stale requests and alternates between two
   reusable capture surfaces, avoiding a thread, bitmap allocation, and pixel
@@ -86,9 +88,10 @@ destination to the corresponding directory.
   Open, closed, minimized, and renamed windows are reconciled automatically.
 - The contextual strip says either **Editing resource** or **Previewing
   window**; generic panel-title rows have been removed.
-- Use **Fit**, **−**, **+**, or the mouse wheel to control zoom. **View → Actual
-  Size** (or **1**) switches to 100%. Drag a preview, or middle-drag an image,
-  to pan. At 100%, image pixels are mapped exactly to
+- Use **Fit**, **−**, **+**, or the mouse wheel to control zoom. Wheel zoom keeps
+  the image point beneath the mouse pointer in place. **View → Actual
+  Size** (or **1**) switches to 100%. With Select, drag an image background or
+  preview to pan; middle-drag also works from any tool. At 100%, image pixels are mapped exactly to
   display pixels; scaled views use halftone filtering. The editor is
   double-buffered so boundaries remain above the image throughout a drag.
 - The three-column layout is responsive and DPI-aware. Controls are repositioned
