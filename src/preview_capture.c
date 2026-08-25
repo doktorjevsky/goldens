@@ -38,23 +38,31 @@ static BOOL render_window(HWND window, HDC destination, const RECT *bounds,
     return rendered;
 }
 
-BOOL golden_capture_window_preview_with_renderer(HWND window, GoldenImage *image,
-                                                 GoldenPreviewRenderer renderer,
-                                                 void *context) {
-    if (!image) return FALSE;
-    ZeroMemory(image, sizeof(*image));
-    if (!window || !IsWindow(window) || !renderer) return FALSE;
-
-    RECT bounds = {0};
+static BOOL window_bounds(HWND window, RECT *bounds, int *width, int *height) {
+    if (!window || !IsWindow(window)) return FALSE;
+    RECT window_rectangle = {0};
     if (FAILED(DwmGetWindowAttribute(window, DWMWA_EXTENDED_FRAME_BOUNDS,
-                                     &bounds, sizeof(bounds))))
-        GetWindowRect(window, &bounds);
-    int width = bounds.right - bounds.left;
-    int height = bounds.bottom - bounds.top;
-    if (width <= 0 || height <= 0 || width > 32768 || height > 32768) return FALSE;
+                                     &window_rectangle, sizeof(window_rectangle))) &&
+        !GetWindowRect(window, &window_rectangle)) return FALSE;
+    *width = window_rectangle.right - window_rectangle.left;
+    *height = window_rectangle.bottom - window_rectangle.top;
+    if (*width <= 0 || *height <= 0 || *width > 32768 || *height > 32768)
+        return FALSE;
+    *bounds = window_rectangle;
+    return TRUE;
+}
 
+static BOOL prepare_surface(GoldenPreviewSurface *surface, int width, int height) {
+    if (surface->memory && surface->bitmap && surface->pixels &&
+        surface->width == (UINT)width && surface->height == (UINT)height)
+        return TRUE;
     HDC screen = GetDC(NULL);
-    HDC memory = screen ? CreateCompatibleDC(screen) : NULL;
+    HDC memory = surface->memory ? surface->memory :
+                 screen ? CreateCompatibleDC(screen) : NULL;
+    if (!screen || !memory) {
+        if (screen) ReleaseDC(NULL, screen);
+        return FALSE;
+    }
     BITMAPINFO info = {0};
     info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
     info.bmiHeader.biWidth = width;
@@ -63,29 +71,92 @@ BOOL golden_capture_window_preview_with_renderer(HWND window, GoldenImage *image
     info.bmiHeader.biBitCount = 32;
     info.bmiHeader.biCompression = BI_RGB;
     BYTE *dib_pixels = NULL;
-    HBITMAP bitmap = screen ? CreateDIBSection(screen, &info, DIB_RGB_COLORS,
-                                                (void **)&dib_pixels, NULL, 0) : NULL;
-    BOOL rendered = FALSE;
-    if (memory && bitmap && dib_pixels) {
-        HGDIOBJ previous = SelectObject(memory, bitmap);
-        rendered = renderer(window, memory, &bounds, dib_pixels, width, height, context);
-        if (rendered) {
-            size_t bytes = (size_t)width * (size_t)height * 4;
-            image->pixels = (BYTE *)malloc(bytes);
-            if (image->pixels) {
-                memcpy(image->pixels, dib_pixels, bytes);
-                image->width = (UINT)width;
-                image->height = (UINT)height;
-                image->stride = (UINT)width * 4;
-            } else rendered = FALSE;
-        }
-        SelectObject(memory, previous);
+    HBITMAP bitmap = CreateDIBSection(screen, &info, DIB_RGB_COLORS,
+                                      (void **)&dib_pixels, NULL, 0);
+    if (!bitmap || !dib_pixels) {
+        if (bitmap) DeleteObject(bitmap);
+        if (!surface->memory) DeleteDC(memory);
+        ReleaseDC(NULL, screen);
+        return FALSE;
     }
-    if (bitmap) DeleteObject(bitmap);
-    if (memory) DeleteDC(memory);
-    if (screen) ReleaseDC(NULL, screen);
-    if (!rendered) golden_image_free(image);
-    return rendered;
+    HGDIOBJ previous = SelectObject(memory, bitmap);
+    if (!previous || previous == HGDI_ERROR) {
+        DeleteObject(bitmap);
+        if (!surface->memory) DeleteDC(memory);
+        ReleaseDC(NULL, screen);
+        return FALSE;
+    }
+    if (!surface->memory) surface->original_bitmap = previous;
+    else DeleteObject(surface->bitmap);
+    surface->memory = memory;
+    surface->bitmap = bitmap;
+    surface->pixels = dib_pixels;
+    surface->width = (UINT)width;
+    surface->height = (UINT)height;
+    surface->stride = (UINT)width * 4;
+    ReleaseDC(NULL, screen);
+    return TRUE;
+}
+
+BOOL golden_preview_surface_capture_with_renderer(
+    GoldenPreviewSurface *surface, HWND window,
+    GoldenPreviewRenderer renderer, void *context) {
+    if (!surface || !renderer) return FALSE;
+    RECT bounds;
+    int width, height;
+    if (!window_bounds(window, &bounds, &width, &height) ||
+        !prepare_surface(surface, width, height)) return FALSE;
+    return renderer(window, surface->memory, &bounds, surface->pixels,
+                    width, height, context);
+}
+
+BOOL golden_preview_surface_capture(GoldenPreviewSurface *surface, HWND window) {
+    return golden_preview_surface_capture_with_renderer(
+        surface, window, render_window, NULL);
+}
+
+GoldenImage golden_preview_surface_image(const GoldenPreviewSurface *surface) {
+    GoldenImage image = {0};
+    if (surface && surface->pixels) {
+        image.pixels = surface->pixels;
+        image.width = surface->width;
+        image.height = surface->height;
+        image.stride = surface->stride;
+    }
+    return image;
+}
+
+void golden_preview_surface_release(GoldenPreviewSurface *surface) {
+    if (!surface) return;
+    if (surface->memory && surface->original_bitmap)
+        SelectObject(surface->memory, surface->original_bitmap);
+    if (surface->bitmap) DeleteObject(surface->bitmap);
+    if (surface->memory) DeleteDC(surface->memory);
+    *surface = (GoldenPreviewSurface){0};
+}
+
+BOOL golden_capture_window_preview_with_renderer(HWND window, GoldenImage *image,
+                                                 GoldenPreviewRenderer renderer,
+                                                 void *context) {
+    if (!image) return FALSE;
+    GoldenPreviewSurface surface = {0};
+    BOOL rendered = golden_preview_surface_capture_with_renderer(
+        &surface, window, renderer, context);
+    GoldenImage captured = golden_preview_surface_image(&surface);
+    if (rendered) {
+        size_t bytes = (size_t)captured.stride * captured.height;
+        captured.pixels = (BYTE *)malloc(bytes);
+        if (captured.pixels) memcpy(captured.pixels, surface.pixels, bytes);
+        else rendered = FALSE;
+    }
+    golden_preview_surface_release(&surface);
+    if (!rendered) {
+        golden_image_free(&captured);
+        return FALSE;
+    }
+    golden_image_free(image);
+    *image = captured;
+    return TRUE;
 }
 
 BOOL golden_capture_window_preview(HWND window, GoldenImage *image) {

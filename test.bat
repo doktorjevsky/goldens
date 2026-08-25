@@ -55,8 +55,15 @@ if errorlevel 1 exit /b 1
 build\resource_ops_tests.exe
 if errorlevel 1 exit /b 1
 
+%CC% -std=c17 -O2 -Wall -Wextra -DUNICODE -D_UNICODE ^
+  tests\atomic_file_tests.c src\atomic_file.c ^
+  -o build\atomic_file_tests.exe -luser32
+if errorlevel 1 exit /b 1
+build\atomic_file_tests.exe
+if errorlevel 1 exit /b 1
+
 %CC% -std=c17 -O2 -Wall -Wextra -DUNICODE -D_UNICODE -DCOBJMACROS -municode ^
-  tests\png_io_tests.c src\image_io.c -o build\png_io_tests.exe ^
+  tests\png_io_tests.c src\image_io.c src\atomic_file.c -o build\png_io_tests.exe ^
   -lole32 -luuid -lwindowscodecs
 if errorlevel 1 exit /b 1
 build\png_io_tests.exe
@@ -64,8 +71,17 @@ if errorlevel 1 exit /b 1
 
 %CC% -std=c17 -O2 -Wall -Wextra -DUNICODE -D_UNICODE -DCOBJMACROS ^
   -D_WIN32_WINNT=0x0A00 -DWINVER=0x0A00 ^
-  tests\preview_capture_tests.c src\preview_capture.c src\image_io.c ^
+  tests\preview_capture_tests.c src\preview_capture.c src\image_io.c src\atomic_file.c ^
   -o build\preview_capture_tests.exe -ldwmapi -lgdi32 -luser32 -lole32 -luuid -lwindowscodecs
 if errorlevel 1 exit /b 1
 build\preview_capture_tests.exe
+if errorlevel 1 exit /b 1
+
+%CC% -std=c17 -O2 -Wall -Wextra -DUNICODE -D_UNICODE -DCOBJMACROS ^
+  -D_WIN32_WINNT=0x0A00 -DWINVER=0x0A00 ^
+  tests\preview_service_tests.c src\preview_service.c src\preview_capture.c ^
+  src\image_io.c src\atomic_file.c -o build\preview_service_tests.exe ^
+  -ldwmapi -lgdi32 -luser32 -lole32 -luuid -lwindowscodecs
+if errorlevel 1 exit /b 1
+build\preview_service_tests.exe
 if errorlevel 1 exit /b 1

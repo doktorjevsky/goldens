@@ -23,7 +23,9 @@ build.bat
 ```
 
 The standalone application is written in C17 and uses only Windows system
-libraries. The executable is produced at `build\goldens.exe`.
+libraries. The executable is produced at `build\goldens.exe`. Conversion,
+format, shadowing, and prototype diagnostics are enabled and treated as build
+errors.
 
 Goldens opens the process working directory as its resource root at startup, so
 running it from a resource directory requires no setup:
@@ -64,12 +66,20 @@ destination to the corresponding directory.
   annotation first returns selection to its parent PNG. If a displayed PNG or
   window is deselected, the editor falls back to the source selected in the
   other tree or becomes empty.
-- Changes are written only by **File → Save Annotations**. Switching images or exiting prompts if
-  there are unsaved changes.
+- Changes are written only by **File → Save Annotations**. JSON and captured
+  PNG files are replaced atomically, so an interrupted or failed write leaves
+  the last valid file in place. Switching images or exiting prompts if there
+  are unsaved changes.
 - Select a window in the right column to start a continuously refreshed,
   asynchronous bitmap preview in the center, then use **Capture** or
   **Recapture** beside the window list. Preview mode selects **Hand** and
   disables the annotation tools until an editable resource is selected again.
+  A persistent worker coalesces stale requests and alternates between two
+  reusable capture surfaces, avoiding a thread, bitmap allocation, and pixel
+  copy for every frame. Preview refresh and window enumeration pause while
+  panning so pointer movement remains responsive. If the preview service cannot
+  start, Goldens reports the failure and closes instead of silently leaving
+  preview controls inoperative.
   Capture is available only for a selected window; Recapture additionally
   requires a selected PNG or one of its annotations.
   Open, closed, minimized, and renamed windows are reconciled automatically.
@@ -92,14 +102,29 @@ destination to the corresponding directory.
 ## Tests
 
 Run `test.bat`. The native test suite covers annotation names and geometry,
-click normalization, viewport transforms, multi-annotation JSON round trips,
+click normalization, viewport transforms, strict and order-independent JSON
+parsing, arbitrarily long unknown keys, Unicode and escape round trips,
+malformed/truncated input, numeric and nesting limits, full annotation capacity,
+and invalid-model serialization,
 live top-level window lifecycle reconciliation (including minimized windows),
 exact 1:1 GDI rendering, overlay ordering, custom and collapsed column layouts
 from compact to wide and 100–200% DPI, version-compatible native tooltip
 registration and positioning, DPI-scaled tool icon rasterization, transactional
-PNG/JSON renames with post-rename saves, lossless BGRA PNG encode/decode, and
-the window-preview allocation/copy pipeline.
+PNG/JSON renames including rollback failure, atomic-write failure preservation,
+lossless BGRA PNG encode/decode and replacement, reusable preview capture
+surfaces, latest-request coalescing, stale-result rejection, persistent-worker
+reuse, failure recovery, and bounded preview shutdown.
 
 Run `install-hooks.bat` once after cloning. It configures the versioned
 `.githooks` directory. Both pre-commit and pre-push run the complete Windows
 suite and block the Git operation if any test fails.
+
+Run `benchmark.bat` to compare the original allocate-and-rescale paint path
+with the retained-buffer and scaled-image-cache paths used while panning.
+
+For adversarial JSON conformance coverage, clone the MIT-licensed
+[JSONTestSuite](https://github.com/nst/JSONTestSuite) at commit
+`1ef36fa01286573e846ac449e8683f8833c5b26a`, then run
+`json-corpus.bat C:\path\to\JSONTestSuite`. The runner checks all 95
+must-accept and 188 must-reject cases; the suite's 35 implementation-defined
+cases are counted and reported but deliberately not treated as pass/fail.

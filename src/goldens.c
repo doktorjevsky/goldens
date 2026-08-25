@@ -6,6 +6,7 @@
 #include <shlwapi.h>
 #include <dwmapi.h>
 #include <wincodec.h>
+#include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,11 +20,13 @@
 #include "window_tracker.h"
 #include "image_io.h"
 #include "preview_capture.h"
+#include "preview_service.h"
 #include "editor_render.h"
 #include "ui_layout.h"
 #include "ui_tooltip.h"
 #include "ui_tool_icon.h"
 #include "resource_ops.h"
+#include "atomic_file.h"
 
 #define APP_NAME L"Goldens"
 #define MAX_HISTORY 32
@@ -80,17 +83,6 @@ typedef struct {
     BOOL done;
 } PromptState;
 
-typedef struct {
-    HWND target;
-    LONG generation;
-} PreviewRequest;
-
-typedef struct {
-    HWND target;
-    LONG generation;
-    GoldenImage image;
-} PreviewResult;
-
 static HINSTANCE g_instance;
 static HWND g_main, g_tree, g_editor, g_windows, g_status;
 static HWND g_editor_tooltip, g_tool_tooltip;
@@ -105,7 +97,11 @@ static wchar_t g_image_path[MAX_PATH * 4];
 static wchar_t g_current_dir[MAX_PATH * 4];
 static BYTE *g_pixels;
 static UINT g_image_w, g_image_h, g_stride;
+static uint64_t g_image_revision;
+static GoldenBackBuffer g_editor_buffer;
+static GoldenImageCache g_image_cache;
 static GoldenImage g_preview_image;
+static GoldenPreviewService g_preview_service;
 static HWND g_preview_target;
 static wchar_t g_preview_title[256];
 static BOOL g_preview_mode;
@@ -157,6 +153,7 @@ static LRESULT CALLBACK ToolButtonProc(HWND, UINT, WPARAM, LPARAM,
 static BOOL prompt_text(HWND owner, const wchar_t *title, const wchar_t *label,
                         wchar_t *value, size_t capacity);
 static void preview_window(HWND target);
+static void request_preview_frame(void);
 static HWND selected_capture_window(void);
 static void refresh_annotation_tree(void);
 static void update_context_label(void);
@@ -221,13 +218,15 @@ static void update_context_label(void) {
 static void snapshot_current(Snapshot *s) {
     s->count = g_annotation_count;
     s->selected = g_selected;
-    memcpy(s->items, g_annotations, sizeof(Annotation) * g_annotation_count);
+    memcpy(s->items, g_annotations,
+           sizeof(Annotation) * (size_t)g_annotation_count);
 }
 
 static void restore_snapshot(const Snapshot *s) {
     g_annotation_count = s->count;
     g_selected = s->selected;
-    memcpy(g_annotations, s->items, sizeof(Annotation) * s->count);
+    memcpy(g_annotations, s->items,
+           sizeof(Annotation) * (size_t)s->count);
     g_dirty = TRUE;
     update_tool_availability();
     refresh_annotation_tree();
@@ -381,16 +380,19 @@ static void clear_image(void) {
     g_pixels = NULL;
     g_image_w = g_image_h = g_stride = 0;
     g_resource_visible = FALSE;
+    ++g_image_revision;
 }
 
 static void clear_preview(void) {
     BOOL was_previewing = g_preview_mode;
     InterlockedIncrement(&g_preview_generation);
-    golden_image_free(&g_preview_image);
+    golden_preview_service_clear(&g_preview_service);
+    g_preview_image = (GoldenImage){0};
     g_preview_target = NULL;
     g_preview_title[0] = 0;
     g_preview_mode = FALSE;
     g_preview_loading = FALSE;
+    ++g_image_revision;
     if (was_previewing) g_tool = g_tool_before_preview;
     update_context_label();
     update_tool_availability();
@@ -453,11 +455,7 @@ static BOOL save_annotations(void) {
     size_t json_length = 0;
     char *json = golden_document_serialize_utf8(g_annotations, g_annotation_count, &json_length);
     if (!json) { show_error(L"Could not serialize the annotations."); return FALSE; }
-    FILE *file = _wfopen(path, L"wb");
-    if (!file) { free(json); show_error(L"Could not write the annotation JSON file."); return FALSE; }
-    size_t written = fwrite(json, 1, json_length, file);
-    int closed = fclose(file);
-    BOOL ok = written == json_length && closed == 0;
+    BOOL ok = golden_atomic_write_bytes(path, json, json_length);
     free(json);
     if (ok) g_dirty = FALSE;
     else show_error(L"Could not finish writing the annotation JSON file.");
@@ -776,8 +774,9 @@ static void image_layout(HWND hwnd, RECT *dest, double *scale) {
     if ((!g_preview_mode && !active_pixels()) || !width || !height) {
         SetRectEmpty(dest); *scale = 1.0; return;
     }
-    GoldenViewport viewport = golden_compute_viewport(width, height, client.right, client.bottom,
-                                                       30, g_zoom, g_pan_x, g_pan_y);
+    GoldenViewport viewport = golden_compute_viewport(
+        (int)width, (int)height, client.right, client.bottom,
+        30, g_zoom, g_pan_x, g_pan_y);
     *dest = viewport.destination;
     *scale = viewport.scale;
 }
@@ -787,20 +786,26 @@ static BOOL client_to_image(HWND hwnd, POINT client, POINT *image) {
     double scale;
     image_layout(hwnd, &dest, &scale);
     GoldenViewport viewport = {dest, scale};
-    return golden_view_to_image(&viewport, client, active_width(), active_height(), image);
+    return golden_view_to_image(&viewport, client, (int)active_width(),
+                                (int)active_height(), image);
+}
+
+static RECT annotation_screen_rect_for_layout(const RECT *dest, double scale,
+                                               const RECT *boundary) {
+    RECT r = {
+        dest->left + (LONG)(boundary->left * scale),
+        dest->top + (LONG)(boundary->top * scale),
+        dest->left + (LONG)(boundary->right * scale),
+        dest->top + (LONG)(boundary->bottom * scale)
+    };
+    return r;
 }
 
 static RECT annotation_screen_rect(HWND hwnd, const RECT *boundary) {
-    RECT dest;
+    RECT destination;
     double scale;
-    image_layout(hwnd, &dest, &scale);
-    RECT r = {
-        dest.left + (LONG)(boundary->left * scale),
-        dest.top + (LONG)(boundary->top * scale),
-        dest.left + (LONG)(boundary->right * scale),
-        dest.top + (LONG)(boundary->bottom * scale)
-    };
-    return r;
+    image_layout(hwnd, &destination, &scale);
+    return annotation_screen_rect_for_layout(&destination, scale, boundary);
 }
 
 static void hide_annotation_tooltip(HWND hwnd) {
@@ -876,10 +881,14 @@ static void draw_editor(HWND hwnd, HDC dc) {
     RECT dest;
     double scale;
     image_layout(hwnd, &dest, &scale);
-    golden_draw_bgra_image(dc, pixels, image_w, image_h, &dest, scale);
+    if (!golden_draw_cached_bgra_image(&g_image_cache, dc, pixels,
+                                       image_w, image_h, &dest, scale,
+                                       g_image_revision))
+        golden_draw_bgra_image(dc, pixels, image_w, image_h, &dest, scale);
     FrameRect(dc, &dest, (HBRUSH)GetStockObject(BLACK_BRUSH));
     for (int i = 0; !g_preview_mode && i < g_annotation_count; ++i) {
-        RECT r = annotation_screen_rect(hwnd, &g_annotations[i].boundary);
+        RECT r = annotation_screen_rect_for_layout(
+            &dest, scale, &g_annotations[i].boundary);
         golden_draw_boundary(dc, &r,
             i == g_selected ? RGB(255, 180, 0) : RGB(0, 220, 255),
             i == g_selected ? 3 : 2, PS_SOLID);
@@ -897,7 +906,7 @@ static void draw_editor(HWND hwnd, HDC dc) {
     if (!g_preview_mode && g_drawing) {
         RECT boundary = {min(g_draw_start.x, g_draw_current.x), min(g_draw_start.y, g_draw_current.y),
                          max(g_draw_start.x, g_draw_current.x), max(g_draw_start.y, g_draw_current.y)};
-        RECT r = annotation_screen_rect(hwnd, &boundary);
+        RECT r = annotation_screen_rect_for_layout(&dest, scale, &boundary);
         golden_fill_tinted_rect(dc, &r, RGB(255, 150, 0), 112);
         golden_draw_boundary(dc, &r, RGB(255, 210, 0), 3, PS_SOLID);
     }
@@ -920,16 +929,12 @@ static void paint_editor(HWND hwnd) {
     GetClientRect(hwnd, &client);
     int width = max(1, client.right - client.left);
     int height = max(1, client.bottom - client.top);
-    HDC buffer_dc = CreateCompatibleDC(paint_dc);
-    HBITMAP buffer = buffer_dc ? CreateCompatibleBitmap(paint_dc, width, height) : NULL;
-    HGDIOBJ previous = NULL;
-    if (buffer) previous = SelectObject(buffer_dc, buffer);
-    HDC target = buffer ? buffer_dc : paint_dc;
+    BOOL buffered = golden_back_buffer_ensure(&g_editor_buffer, paint_dc,
+                                              width, height);
+    HDC target = buffered ? g_editor_buffer.dc : paint_dc;
     draw_editor(hwnd, target);
-    if (buffer) BitBlt(paint_dc, 0, 0, width, height, buffer_dc, 0, 0, SRCCOPY);
-    if (previous) SelectObject(buffer_dc, previous);
-    if (buffer) DeleteObject(buffer);
-    if (buffer_dc) DeleteDC(buffer_dc);
+    if (buffered)
+        BitBlt(paint_dc, 0, 0, width, height, g_editor_buffer.dc, 0, 0, SRCCOPY);
     EndPaint(hwnd, &ps);
 }
 
@@ -949,7 +954,8 @@ static void delete_selected(void) {
     if (g_selected < 0) return;
     push_undo();
     memmove(&g_annotations[g_selected], &g_annotations[g_selected + 1],
-            sizeof(Annotation) * (g_annotation_count - g_selected - 1));
+            sizeof(Annotation) *
+                (size_t)(g_annotation_count - g_selected - 1));
     g_annotation_count--;
     if (g_selected >= g_annotation_count) g_selected = g_annotation_count - 1;
     g_dirty = TRUE;
@@ -1090,6 +1096,7 @@ static LRESULT CALLBACK EditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (g_panning) {
             g_panning = FALSE;
             ReleaseCapture();
+            if (g_preview_mode) request_preview_frame();
             InvalidateRect(hwnd, NULL, FALSE);
             return 0;
         }
@@ -1126,7 +1133,11 @@ static LRESULT CALLBACK EditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         SetCapture(hwnd);
         return 0;
     case WM_MBUTTONUP:
-        if (g_panning) { g_panning = FALSE; ReleaseCapture(); }
+        if (g_panning) {
+            g_panning = FALSE;
+            ReleaseCapture();
+            if (g_preview_mode) request_preview_frame();
+        }
         return 0;
     case WM_MOUSEWHEEL: {
         zoom_by(GET_WHEEL_DELTA_WPARAM(wp) > 0 ? 1.25 : 0.8);
@@ -1143,6 +1154,15 @@ static LRESULT CALLBACK EditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         else if (wp == '0') { g_zoom = 0.0; g_pan_x = g_pan_y = 0; InvalidateRect(hwnd, NULL, FALSE); }
         else if (wp == '1') { g_zoom = 1.0; g_pan_x = g_pan_y = 0; InvalidateRect(hwnd, NULL, FALSE); }
         return 0;
+    case WM_CAPTURECHANGED:
+        g_panning = FALSE;
+        g_drag_mode = 0;
+        g_drawing = FALSE;
+        return 0;
+    case WM_NCDESTROY:
+        golden_image_cache_release(&g_image_cache);
+        golden_back_buffer_release(&g_editor_buffer);
+        break;
     }
     return DefWindowProcW(hwnd, msg, wp, lp);
 }
@@ -1154,7 +1174,8 @@ static void refresh_windows(void) {
     HWND selected_window = selected_capture_window();
     g_rebuilding_windows = TRUE;
     TreeView_DeleteAllItems(g_windows);
-    memcpy(g_window_items, next, sizeof(GoldenWindowInfo) * next_count);
+    memcpy(g_window_items, next,
+           sizeof(GoldenWindowInfo) * (size_t)next_count);
     g_window_count = next_count;
     HTREEITEM group = NULL, selected_item = NULL;
     wchar_t previous[128] = L"";
@@ -1270,37 +1291,22 @@ static void clear_tree_selection_on_blank_click(HWND tree) {
     TreeView_SelectItem(tree, NULL);
 }
 
-static DWORD WINAPI preview_worker(void *parameter) {
-    PreviewRequest *request = (PreviewRequest *)parameter;
-    PreviewResult *result = (PreviewResult *)calloc(1, sizeof(*result));
-    if (result) {
-        result->target = request->target;
-        result->generation = request->generation;
-        golden_capture_window_preview(request->target, &result->image);
-        if (!PostMessageW(g_main, WM_PREVIEW_READY, 0, (LPARAM)result)) {
-            golden_image_free(&result->image);
-            free(result);
-        }
-    } else PostMessageW(g_main, WM_PREVIEW_READY, (WPARAM)request->generation, 0);
-    free(request);
-    return 0;
+static BOOL capture_preview_frame(HWND target, GoldenPreviewSurface *surface,
+                                  void *context) {
+    UNREFERENCED_PARAMETER(context);
+    return golden_preview_surface_capture(surface, target);
 }
 
 static void request_preview_frame(void) {
-    if (!g_preview_mode || !g_preview_target || g_preview_loading || IsIconic(g_main)) return;
+    if (!g_preview_mode || !g_preview_target || g_preview_loading ||
+        g_panning || IsIconic(g_main)) return;
     if (!IsWindow(g_preview_target)) {
         clear_preview();
         InvalidateRect(g_editor, NULL, FALSE);
         return;
     }
-    PreviewRequest *request = (PreviewRequest *)malloc(sizeof(*request));
-    if (!request) return;
-    request->target = g_preview_target;
-    request->generation = g_preview_generation;
-    g_preview_loading = TRUE;
-    HANDLE thread = CreateThread(NULL, 0, preview_worker, request, 0, NULL);
-    if (thread) CloseHandle(thread);
-    else { free(request); g_preview_loading = FALSE; }
+    g_preview_loading = golden_preview_service_request(
+        &g_preview_service, g_preview_target, g_preview_generation);
 }
 
 static void preview_window(HWND target) {
@@ -1351,9 +1357,13 @@ static BOOL capture_window_to(HWND target, const wchar_t *path) {
     RECT rect;
     if (FAILED(DwmGetWindowAttribute(target, DWMWA_EXTENDED_FRAME_BOUNDS, &rect, sizeof(rect))))
         GetWindowRect(target, &rect);
-    int width = rect.right - rect.left, height = rect.bottom - rect.top;
+    LONGLONG measured_width = (LONGLONG)rect.right - rect.left;
+    LONGLONG measured_height = (LONGLONG)rect.bottom - rect.top;
     BOOL ok = FALSE;
-    if (width > 0 && height > 0) {
+    if (measured_width > 0 && measured_width <= INT_MAX / 4 &&
+        measured_height > 0 && measured_height <= INT_MAX) {
+        int width = (int)measured_width;
+        int height = (int)measured_height;
         HDC screen = GetDC(NULL);
         HDC memory = CreateCompatibleDC(screen);
         BITMAPINFO info = {0};
@@ -1368,7 +1378,8 @@ static BOOL capture_window_to(HWND target, const wchar_t *path) {
         if (bitmap && memory && bits) {
             HGDIOBJ old = SelectObject(memory, bitmap);
             if (BitBlt(memory, 0, 0, width, height, screen, rect.left, rect.top, SRCCOPY | CAPTUREBLT))
-                ok = save_png_pixels(path, bits, width, height, width * 4);
+                ok = save_png_pixels(path, bits, (UINT)width, (UINT)height,
+                                     (UINT)width * 4u);
             SelectObject(memory, old);
         }
         if (bitmap) DeleteObject(bitmap);
@@ -1419,6 +1430,8 @@ static BOOL rename_resource_file(const wchar_t *old_path, const wchar_t *edited_
             L"A JSON annotation file with that resource name already exists." :
             result == GOLDEN_RENAME_JSON_FAILED_ROLLED_BACK ?
             L"The JSON file could not be renamed, so the PNG rename was rolled back." :
+            result == GOLDEN_RENAME_ROLLBACK_FAILED ?
+            L"The JSON rename and PNG rollback both failed. The PNG and JSON may now have different names." :
             L"Windows could not rename the resource pair.";
         show_error(message);
         return FALSE;
@@ -1873,6 +1886,14 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
     case WM_CREATE: {
         g_main = hwnd;
+        if (!golden_preview_service_init(&g_preview_service, hwnd,
+                WM_PREVIEW_READY, capture_preview_frame, NULL)) {
+            MessageBoxW(hwnd,
+                L"Goldens could not start its window preview service.\n\n"
+                L"The application will close.",
+                APP_NAME, MB_OK | MB_ICONERROR);
+            return -1;
+        }
         SetMenu(hwnd, create_main_menu());
         g_context_label = CreateWindowW(L"STATIC", L"  No resource selected", WS_CHILD | WS_VISIBLE |
             SS_LEFT | SS_CENTERIMAGE | SS_ENDELLIPSIS | SS_NOPREFIX,
@@ -1983,7 +2004,10 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     }
     case WM_TIMER:
-        if (wp == WINDOW_TIMER) { refresh_windows(); refresh_preview_metadata(); }
+        if (wp == WINDOW_TIMER && !g_panning) {
+            refresh_windows();
+            refresh_preview_metadata();
+        }
         else if (wp == PREVIEW_TIMER) request_preview_frame();
         return 0;
     case WM_COMMAND:
@@ -2007,21 +2031,16 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         break;
     case WM_PREVIEW_READY: {
-        PreviewResult *result = (PreviewResult *)lp;
-        LONG generation = result ? result->generation : (LONG)wp;
-        if (generation == g_preview_generation && g_preview_mode &&
-            (!result || result->target == g_preview_target)) {
-            if (result && result->image.pixels) {
-                golden_image_free(&g_preview_image);
-                g_preview_image = result->image;
-                ZeroMemory(&result->image, sizeof(result->image));
-            }
+        GoldenImage image = {0};
+        GoldenPreviewCompletion completion = golden_preview_service_complete(
+            &g_preview_service, g_preview_target, g_preview_generation, &image);
+        if (completion == GOLDEN_PREVIEW_COMPLETION_ACCEPTED ||
+            completion == GOLDEN_PREVIEW_COMPLETION_FAILED) {
+            g_preview_image = image;
+            if (completion == GOLDEN_PREVIEW_COMPLETION_ACCEPTED)
+                ++g_image_revision;
             g_preview_loading = FALSE;
             InvalidateRect(g_editor, NULL, FALSE);
-        }
-        if (result) {
-            golden_image_free(&result->image);
-            free(result);
         }
         return 0;
     }
@@ -2166,6 +2185,7 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         free_tree_item(g_tree, TreeView_GetRoot(g_tree));
         clear_preview();
+        golden_preview_service_shutdown(&g_preview_service, 2000);
         clear_image();
         PostQuitMessage(0);
         return 0;
