@@ -3,7 +3,9 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-from litewinwrap.types import HWND
+import numpy as np
+
+from litewinwrap.types import Capture, HWND, Match, Point, Rect, Target
 from litewinwrap.window import Window
 
 
@@ -35,6 +37,39 @@ class WindowTests(unittest.TestCase):
             children = window.get_children(recursive=False, visible_only=False)
 
         self.assertEqual(tuple(int(child.hwnd) for child in children), (101, 102))
+
+    def test_target_methods_delegate_with_the_window_handle(self) -> None:
+        window = Window(HWND(123))
+        target = Target("button", np.zeros((2, 2, 3), dtype=np.uint8))
+        capture = Capture(np.zeros((4, 4, 3), dtype=np.uint8), Rect(1, 2, 5, 6))
+        found = Match("button", 0.99, Rect(2, 3, 4, 5), Point(3, 4))
+
+        with (
+            patch("litewinwrap.match.capture", return_value=capture) as screenshot,
+            patch("litewinwrap.match.find", return_value=found) as find,
+            patch("litewinwrap.match.find_all", return_value=(found,)) as find_all,
+            patch("litewinwrap.match.click", return_value=found) as click,
+        ):
+            self.assertIs(window.screenshot(), capture)
+            self.assertIs(window.find_target(target, timeout=2.0), found)
+            self.assertEqual(window.find_targets(target, timeout=2.0), (found,))
+            self.assertIs(window.click_target(target, timeout=2.0), found)
+
+        screenshot.assert_called_once_with(HWND(123))
+        find.assert_called_once_with(
+            HWND(123), target, threshold=0.9, timeout=2.0, overlap=0.3
+        )
+        find_all.assert_called_once_with(
+            HWND(123), target, threshold=0.9, timeout=2.0, overlap=0.3
+        )
+        click.assert_called_once_with(
+            HWND(123),
+            target,
+            threshold=0.9,
+            timeout=2.0,
+            overlap=0.3,
+            button="left",
+        )
 
 
 if __name__ == "__main__":

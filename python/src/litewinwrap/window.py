@@ -6,7 +6,8 @@ from dataclasses import dataclass
 from typing import Pattern
 
 from . import win32
-from .types import HWND, Rect
+from .mouse import Button
+from .types import Capture, HWND, Match, Rect, Target
 
 
 _POLL_INTERVAL = 0.05
@@ -224,6 +225,67 @@ class Window:
         raise WindowNotFoundError(
             f"No child of {int(self.hwnd)} matched {selectors} "
             f"within {timeout:.3f}s"
+        )
+
+    def screenshot(self) -> Capture:
+        from . import match as image_match
+
+        return image_match.capture(self.hwnd)
+
+    def find_targets(
+        self,
+        target: Target,
+        *,
+        threshold: float = 0.90,
+        timeout: float = 0.0,
+        overlap: float = 0.30,
+    ) -> tuple[Match, ...]:
+        from . import match as image_match
+
+        return image_match.find_all(
+            self.hwnd,
+            target,
+            threshold=threshold,
+            timeout=timeout,
+            overlap=overlap,
+        )
+
+    def find_target(
+        self,
+        target: Target,
+        *,
+        threshold: float = 0.90,
+        timeout: float = 0.0,
+        overlap: float = 0.30,
+    ) -> Match:
+        from . import match as image_match
+
+        return image_match.find(
+            self.hwnd,
+            target,
+            threshold=threshold,
+            timeout=timeout,
+            overlap=overlap,
+        )
+
+    def click_target(
+        self,
+        target: Target,
+        *,
+        threshold: float = 0.90,
+        timeout: float = 0.0,
+        overlap: float = 0.30,
+        button: Button = "left",
+    ) -> Match:
+        from . import match as image_match
+
+        return image_match.click(
+            self.hwnd,
+            target,
+            threshold=threshold,
+            timeout=timeout,
+            overlap=overlap,
+            button=button,
         )
 
     def focus(self, *, restore: bool = True, timeout: float = 1.0) -> Window:

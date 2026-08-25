@@ -108,5 +108,5 @@ suite and block the Git operation if any test fails.
 
 The [`python`](python) subproject contains a first-pass Windows scripting layer
 for live window discovery, child-window enumeration, mouse and keyboard input,
-and OpenCV template matching. The native Goldens application remains
-dependency-free.
+OpenCV template matching, and loading PNG/JSON resources as target mappings.
+The native Goldens application remains dependency-free.

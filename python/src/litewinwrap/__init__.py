@@ -1,4 +1,5 @@
 from . import keyboard, match, mouse, win32
+from .goldens import Goldens, GoldensFormatError
 from .types import Capture, HWND, Match, Point, Rect, Target
 from .window import (
     FocusTimeoutError,
@@ -12,6 +13,8 @@ from .window import (
 __all__ = [
     "Capture",
     "FocusTimeoutError",
+    "Goldens",
+    "GoldensFormatError",
     "HWND",
     "Match",
     "Point",

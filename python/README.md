@@ -21,27 +21,36 @@ py -m pip install -e .
 import re
 import subprocess
 
-import cv2
-
-from litewinwrap import Target, Window, keyboard, match, win32
+from litewinwrap import Goldens, Window, win32
 
 win32.enable_per_monitor_dpi_awareness()
 
-process = subprocess.Popen([r"C:\path\to\application.exe", "--example-argument"])
+subprocess.Popen(["calc.exe"])
 window = Window.find(
-    re.compile("Application title", re.IGNORECASE),
-    process_id=process.pid,
+    re.compile("Calculator", re.IGNORECASE),
     timeout=5.0,
 )
 window.focus()
 
-pixels = cv2.imread("button_8.png", cv2.IMREAD_COLOR)
-eight = Target("button_8", pixels, click=(0.5, 0.5))
-found = match.click(window, eight, threshold=0.92, timeout=2.0)
+targets = Goldens("calculator.png")
+found = window.click_target(targets["button_8"], threshold=0.92, timeout=2.0)
 
 print(found.score, found.rect, found.click)
-keyboard.write("123")
 ```
+
+`Goldens` eagerly reads the PNG and adjacent JSON sidecar. It validates every
+annotation and exposes copied, read-only crops through normal mapping operations:
+
+```python
+targets["button_8"]
+targets.get("button_8")
+"button_8" in targets
+targets.keys()
+targets.items()
+```
+
+`Window.screenshot()`, `find_target()`, `find_targets()`, and `click_target()`
+take fresh screenshots and retain no target or match state on the window.
 
 `subprocess.Popen` is part of Python's standard library and is deliberately not
 wrapped. Pass an argument list to launch an executable directly. The returned
@@ -65,9 +74,9 @@ annotation, sends a click to its saved normalized click point, and returns the
 Screen capture intentionally reflects what is visible on the desktop. Keep the
 interactive desktop unlocked and the target window unobscured.
 
-See [`examples/steer_window.py`](examples/steer_window.py) for a runnable script.
-Its optional `--start` and repeatable `--start-arg` arguments launch the target
-before looking for its window.
+See [`examples/calculator.py`](examples/calculator.py) for a complete script that
+starts Calculator, loads `calculator.png` and its JSON sidecar, and exercises
+every digit and arithmetic-operation target.
 
 ## Tests
 
