@@ -130,3 +130,10 @@ For adversarial JSON conformance coverage, clone the MIT-licensed
 `json-corpus.bat C:\path\to\JSONTestSuite`. The runner checks all 95
 must-accept and 188 must-reject cases; the suite's 35 implementation-defined
 cases are counted and reported but deliberately not treated as pass/fail.
+
+## Python scripting prototype
+
+The [`python`](python) subproject contains a first-pass Windows scripting layer
+for live window discovery, child-window enumeration, mouse and keyboard input,
+OpenCV template matching, and loading PNG/JSON resources as target mappings.
+The native Goldens application remains dependency-free.

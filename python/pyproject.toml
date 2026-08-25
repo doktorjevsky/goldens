@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "litewinwrap"
+version = "0.1.0"
+description = "Small stateless Win32 desktop scripting primitives"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Simon Porsgaard" }]
+dependencies = [
+  "numpy>=1.26",
+  "opencv-python-headless>=4.9",
+]
+classifiers = [
+  "Operating System :: Microsoft :: Windows :: Windows 11",
+  "Programming Language :: Python :: 3",
+  "Typing :: Typed",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+litewinwrap = ["py.typed"]
