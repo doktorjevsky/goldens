@@ -1,7 +1,19 @@
 #include "../src/image_io.h"
 
 #include <stdio.h>
+#include <stdint.h>
 #include <string.h>
+
+static int image_matches(IWICImagingFactory *factory, const wchar_t *path,
+                         const BYTE *expected, UINT width, UINT height) {
+    GoldenImage loaded = {0};
+    int matches = golden_png_load(factory, path, &loaded) &&
+        loaded.width == width && loaded.height == height &&
+        loaded.stride == width * 4 &&
+        !memcmp(expected, loaded.pixels, (size_t)loaded.stride * height);
+    golden_image_free(&loaded);
+    return matches;
+}
 
 int wmain(void) {
     if (FAILED(CoInitializeEx(NULL, COINIT_APARTMENTTHREADED))) return 1;
@@ -24,11 +36,27 @@ int wmain(void) {
     wcscat(path, L".png");
     int result = 0;
     if (!golden_png_save(factory, path, source, 5, 3, 20)) result = 3;
-    GoldenImage loaded = {0};
-    if (!result && !golden_png_load(factory, path, &loaded)) result = 4;
-    if (!result && (loaded.width != 5 || loaded.height != 3 || loaded.stride != 20)) result = 5;
-    if (!result && memcmp(source, loaded.pixels, sizeof(source))) result = 6;
-    golden_image_free(&loaded);
+    if (!result && !image_matches(factory, path, source, 5, 3)) result = 4;
+
+    if (!result && golden_png_save(factory, path, NULL, 5, 3, 20)) result = 5;
+    if (!result && !image_matches(factory, path, source, 5, 3)) result = 6;
+    if (!result && golden_png_save(factory, path, source, UINT32_MAX, 1,
+                                   UINT32_MAX)) result = 7;
+    if (!result && !image_matches(factory, path, source, 5, 3)) result = 8;
+
+    BYTE replacement[sizeof(source)];
+    memcpy(replacement, source, sizeof(source));
+    for (size_t i = 0; i < sizeof(replacement); i += 4)
+        replacement[i] ^= 0xff;
+    if (!result && !golden_png_save(factory, path, replacement, 5, 3, 20)) result = 9;
+    if (!result && !image_matches(factory, path, replacement, 5, 3)) result = 10;
+
+    wchar_t pattern[MAX_PATH * 2];
+    _snwprintf(pattern, _countof(pattern), L"%s.goldens-*.tmp", path);
+    WIN32_FIND_DATAW found;
+    HANDLE search = FindFirstFileW(pattern, &found);
+    if (!result && search != INVALID_HANDLE_VALUE) result = 11;
+    if (search != INVALID_HANDLE_VALUE) FindClose(search);
     DeleteFileW(path);
     IWICImagingFactory_Release(factory);
     CoUninitialize();

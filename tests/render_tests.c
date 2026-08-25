@@ -1,5 +1,6 @@
 #include <windows.h>
 
+#include <limits.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -31,6 +32,8 @@ int main(void) {
     int lines = golden_draw_bgra_image(destination_dc, source, 4, 4,
                                        &destination_rect, 1.0);
     int failed = lines != 4;
+    if (!failed && golden_draw_bgra_image(destination_dc, source, UINT_MAX, 4,
+                                          &destination_rect, 1.0)) failed = 1;
     for (int i = 0; !failed && i < 16; ++i)
         if (memcmp(source + i * 4, destination + i * 4, 3)) failed = 1;
 
@@ -44,6 +47,33 @@ int main(void) {
     COLORREF interior = GetPixel(destination_dc, 2, 2);
     if (edge != RGB(255, 0, 0)) failed = 1;
     if (interior == RGB(255, 0, 0)) failed = 1;
+
+    GoldenBackBuffer back_buffer = {0};
+    if (!golden_back_buffer_ensure(&back_buffer, destination_dc, 4, 4)) failed = 1;
+    HBITMAP first_buffer = back_buffer.bitmap;
+    if (!failed && (!golden_back_buffer_ensure(&back_buffer, destination_dc, 2, 2) ||
+                    back_buffer.bitmap != first_buffer)) failed = 1;
+    if (!failed && (!golden_back_buffer_ensure(&back_buffer, destination_dc, 8, 6) ||
+                    back_buffer.bitmap == first_buffer ||
+                    back_buffer.width < 8 || back_buffer.height < 6)) failed = 1;
+    golden_back_buffer_release(&back_buffer);
+    if (back_buffer.dc || back_buffer.bitmap) failed = 1;
+
+    GoldenImageCache cache = {0};
+    RECT cached_destination = {0, 0, 4, 4};
+    source[0] = 17;
+    if (!failed && !golden_draw_cached_bgra_image(&cache, destination_dc,
+            source, 4, 4, &cached_destination, 1.0, 1)) failed = 1;
+    COLORREF cached_pixel = GetPixel(destination_dc, 0, 0);
+    source[0] = 91;
+    if (!failed && !golden_draw_cached_bgra_image(&cache, destination_dc,
+            source, 4, 4, &cached_destination, 1.0, 1)) failed = 1;
+    if (!failed && GetPixel(destination_dc, 0, 0) != cached_pixel) failed = 1;
+    if (!failed && !golden_draw_cached_bgra_image(&cache, destination_dc,
+            source, 4, 4, &cached_destination, 1.0, 2)) failed = 1;
+    if (!failed && GetBValue(GetPixel(destination_dc, 0, 0)) != 91) failed = 1;
+    golden_image_cache_release(&cache);
+
     SelectObject(destination_dc, old);
     DeleteObject(bitmap);
     DeleteDC(destination_dc);

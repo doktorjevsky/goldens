@@ -1,5 +1,7 @@
 #include "image_io.h"
+#include "atomic_file.h"
 
+#include <limits.h>
 #include <stdint.h>
 #include <stdlib.h>
 
@@ -24,15 +26,21 @@ BOOL golden_png_load(IWICImagingFactory *factory, const wchar_t *path, GoldenIma
         (IWICBitmapSource *)frame, &GUID_WICPixelFormat32bppBGRA,
         WICBitmapDitherTypeNone, NULL, 0.0, WICBitmapPaletteTypeCustom);
     if (SUCCEEDED(hr)) {
-        size_t stride = (size_t)loaded.width * 4;
-        size_t bytes = stride * loaded.height;
-        if (!loaded.width || !loaded.height || bytes > UINT32_MAX) hr = E_FAIL;
-        else {
-            loaded.stride = (UINT)stride;
-            loaded.pixels = (BYTE *)malloc(bytes);
-            if (!loaded.pixels) hr = E_OUTOFMEMORY;
-            else hr = IWICFormatConverter_CopyPixels(converter, NULL, loaded.stride,
-                                                      (UINT)bytes, loaded.pixels);
+        if (!loaded.width || !loaded.height || loaded.width > INT_MAX ||
+            loaded.height > INT_MAX || loaded.width > UINT32_MAX / 4) {
+            hr = E_FAIL;
+        } else {
+            size_t stride = (size_t)loaded.width * 4;
+            if (loaded.height > UINT32_MAX / stride) {
+                hr = E_FAIL;
+            } else {
+                size_t bytes = stride * loaded.height;
+                loaded.stride = (UINT)stride;
+                loaded.pixels = (BYTE *)malloc(bytes);
+                if (!loaded.pixels) hr = E_OUTOFMEMORY;
+                else hr = IWICFormatConverter_CopyPixels(
+                    converter, NULL, loaded.stride, (UINT)bytes, loaded.pixels);
+            }
         }
     }
     if (converter) IWICFormatConverter_Release(converter);
@@ -44,26 +52,35 @@ BOOL golden_png_load(IWICImagingFactory *factory, const wchar_t *path, GoldenIma
     return TRUE;
 }
 
-BOOL golden_png_save(IWICImagingFactory *factory, const wchar_t *path,
-                     const BYTE *pixels, UINT width, UINT height, UINT stride) {
-    if (!factory || !path || !pixels || !width || !height || stride < width * 4) return FALSE;
+typedef struct {
+    IWICImagingFactory *factory;
+    const BYTE *pixels;
+    UINT width;
+    UINT height;
+    UINT stride;
+} PngWriterContext;
+
+static BOOL png_write(const wchar_t *path, void *opaque) {
+    PngWriterContext *context = (PngWriterContext *)opaque;
     IWICStream *stream = NULL;
     IWICBitmapEncoder *encoder = NULL;
     IWICBitmapFrameEncode *frame = NULL;
     IPropertyBag2 *properties = NULL;
-    HRESULT hr = IWICImagingFactory_CreateStream(factory, &stream);
+    HRESULT hr = IWICImagingFactory_CreateStream(context->factory, &stream);
     if (SUCCEEDED(hr)) hr = IWICStream_InitializeFromFilename(stream, path, GENERIC_WRITE);
-    if (SUCCEEDED(hr)) hr = IWICImagingFactory_CreateEncoder(factory,
+    if (SUCCEEDED(hr)) hr = IWICImagingFactory_CreateEncoder(context->factory,
         &GUID_ContainerFormatPng, NULL, &encoder);
     if (SUCCEEDED(hr)) hr = IWICBitmapEncoder_Initialize(encoder, (IStream *)stream,
         WICBitmapEncoderNoCache);
     if (SUCCEEDED(hr)) hr = IWICBitmapEncoder_CreateNewFrame(encoder, &frame, &properties);
     if (SUCCEEDED(hr)) hr = IWICBitmapFrameEncode_Initialize(frame, properties);
-    if (SUCCEEDED(hr)) hr = IWICBitmapFrameEncode_SetSize(frame, width, height);
+    if (SUCCEEDED(hr)) hr = IWICBitmapFrameEncode_SetSize(
+        frame, context->width, context->height);
     WICPixelFormatGUID format = GUID_WICPixelFormat32bppBGRA;
     if (SUCCEEDED(hr)) hr = IWICBitmapFrameEncode_SetPixelFormat(frame, &format);
-    if (SUCCEEDED(hr)) hr = IWICBitmapFrameEncode_WritePixels(frame, height, stride,
-                                                               stride * height, (BYTE *)pixels);
+    if (SUCCEEDED(hr)) hr = IWICBitmapFrameEncode_WritePixels(
+        frame, context->height, context->stride,
+        context->stride * context->height, (BYTE *)context->pixels);
     if (SUCCEEDED(hr)) hr = IWICBitmapFrameEncode_Commit(frame);
     if (SUCCEEDED(hr)) hr = IWICBitmapEncoder_Commit(encoder);
     if (properties) IPropertyBag2_Release(properties);
@@ -71,4 +88,13 @@ BOOL golden_png_save(IWICImagingFactory *factory, const wchar_t *path,
     if (encoder) IWICBitmapEncoder_Release(encoder);
     if (stream) IWICStream_Release(stream);
     return SUCCEEDED(hr);
+}
+
+BOOL golden_png_save(IWICImagingFactory *factory, const wchar_t *path,
+                     const BYTE *pixels, UINT width, UINT height, UINT stride) {
+    if (!factory || !path || !pixels || !width || !height ||
+        width > UINT32_MAX / 4 || stride < width * 4 ||
+        stride > UINT32_MAX / height) return FALSE;
+    PngWriterContext context = {factory, pixels, width, height, stride};
+    return golden_atomic_replace_file(path, png_write, &context);
 }

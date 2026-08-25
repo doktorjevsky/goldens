@@ -14,9 +14,17 @@ void golden_resource_json_path(const wchar_t *png_path, wchar_t *output, size_t 
     }
 }
 
-GoldenResourceRenameResult golden_rename_resource_pair(const wchar_t *old_png,
-                                                       const wchar_t *new_png) {
-    if (!old_png || !new_png || GetFileAttributesW(old_png) == INVALID_FILE_ATTRIBUTES)
+static BOOL move_file(const wchar_t *source, const wchar_t *destination,
+                      DWORD flags, void *context) {
+    UNREFERENCED_PARAMETER(context);
+    return MoveFileExW(source, destination, flags);
+}
+
+GoldenResourceRenameResult golden_rename_resource_pair_with_move(
+    const wchar_t *old_png, const wchar_t *new_png,
+    GoldenMoveFileOperation operation, void *context) {
+    if (!old_png || !new_png || !operation ||
+        GetFileAttributesW(old_png) == INVALID_FILE_ATTRIBUTES)
         return GOLDEN_RENAME_SOURCE_MISSING;
     if (!wcscmp(old_png, new_png)) return GOLDEN_RENAME_OK;
     BOOL same_png = !_wcsicmp(old_png, new_png);
@@ -32,10 +40,16 @@ GoldenResourceRenameResult golden_rename_resource_pair(const wchar_t *old_png,
         return GOLDEN_RENAME_JSON_EXISTS;
 
     DWORD flags = MOVEFILE_COPY_ALLOWED | MOVEFILE_WRITE_THROUGH;
-    if (!MoveFileExW(old_png, new_png, flags)) return GOLDEN_RENAME_PNG_FAILED;
-    if (has_json && !MoveFileExW(old_json, new_json, flags)) {
-        MoveFileExW(new_png, old_png, flags);
-        return GOLDEN_RENAME_JSON_FAILED_ROLLED_BACK;
+    if (!operation(old_png, new_png, flags, context)) return GOLDEN_RENAME_PNG_FAILED;
+    if (has_json && !operation(old_json, new_json, flags, context)) {
+        return operation(new_png, old_png, flags, context) ?
+            GOLDEN_RENAME_JSON_FAILED_ROLLED_BACK : GOLDEN_RENAME_ROLLBACK_FAILED;
     }
     return GOLDEN_RENAME_OK;
+}
+
+GoldenResourceRenameResult golden_rename_resource_pair(const wchar_t *old_png,
+                                                       const wchar_t *new_png) {
+    return golden_rename_resource_pair_with_move(old_png, new_png,
+                                                 move_file, NULL);
 }
