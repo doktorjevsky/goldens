@@ -103,3 +103,10 @@ the window-preview allocation/copy pipeline.
 Run `install-hooks.bat` once after cloning. It configures the versioned
 `.githooks` directory. Both pre-commit and pre-push run the complete Windows
 suite and block the Git operation if any test fails.
+
+## Python scripting prototype
+
+The [`python`](python) subproject contains a first-pass Windows scripting layer
+for live window discovery, child-window enumeration, mouse and keyboard input,
+and OpenCV template matching. The native Goldens application remains
+dependency-free.
