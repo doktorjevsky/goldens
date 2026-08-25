@@ -90,6 +90,10 @@ Calculator's display and then demonstrates the structured diagnostics returned
 by `TargetNotFoundError` when the original visual state does not reappear before
 the timeout.
 
+[`examples/calculator_multiple_match.py`](examples/calculator_multiple_match.py)
+presses `1` six times using targets from `calculator.png`, then demonstrates
+`TargetAmbiguousError` using `multiple_match` from `calculator_ones.png`.
+
 ## Tests
 
 The platform-independent matching and value-behaviour tests run on any system

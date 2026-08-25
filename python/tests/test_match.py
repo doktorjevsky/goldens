@@ -42,8 +42,15 @@ class MatchTests(unittest.TestCase):
         pixels[35:45, 50:62] = self.template
         capture = Capture(pixels, Rect(0, 0, 80, 60))
 
-        with self.assertRaises(TargetAmbiguousError):
+        with self.assertRaises(TargetAmbiguousError) as raised:
             match(capture, self.target, threshold=0.99)
+
+        self.assertIs(raised.exception.target, self.target)
+        self.assertEqual(len(raised.exception.matches), 2)
+        self.assertEqual(
+            {item.rect.left for item in raised.exception.matches},
+            {6, 50},
+        )
 
     def test_best_match_explicitly_selects_highest_score(self) -> None:
         pixels = np.zeros((60, 80, 3), dtype=np.uint8)
