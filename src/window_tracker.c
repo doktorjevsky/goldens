@@ -52,6 +52,6 @@ int golden_collect_windows(HWND excluded, GoldenWindowInfo *items, int capacity)
     if (!items || capacity <= 0) return 0;
     WindowCollector collector = {excluded, items, 0, capacity};
     EnumWindows(collect_window, (LPARAM)&collector);
-    qsort(items, collector.count, sizeof(*items), compare_windows);
+    qsort(items, (size_t)collector.count, sizeof(*items), compare_windows);
     return collector.count;
 }

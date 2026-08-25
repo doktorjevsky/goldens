@@ -322,6 +322,51 @@ static BOOL test_opaque_normalization(void) {
     return TRUE;
 }
 
+static int image_matches(IWICImagingFactory *factory, const wchar_t *path,
+                         const BYTE *expected, UINT width, UINT height) {
+    GoldenImage loaded = {0};
+    int matches = golden_png_load(factory, path, &loaded) &&
+        loaded.width == width && loaded.height == height &&
+        loaded.stride == width * 4 &&
+        !memcmp(expected, loaded.pixels, (size_t)loaded.stride * height);
+    golden_image_free(&loaded);
+    return matches;
+}
+
+static BOOL test_atomic_replacement(IWICImagingFactory *factory) {
+    BYTE source[5 * 3 * 4];
+    fill_bgra(source, 5, 3, 20, 3);
+    wchar_t path[MAX_PATH] = L"";
+    if (!make_temp_path(path, _countof(path))) return FALSE;
+
+    BOOL ok = golden_png_save(factory, path, source, 5, 3, 20) &&
+              image_matches(factory, path, source, 5, 3);
+    if (ok) ok = !golden_png_save(factory, path, NULL, 5, 3, 20) &&
+                 image_matches(factory, path, source, 5, 3);
+    if (ok) ok = !golden_png_save(factory, path, source, UINT32_MAX, 1,
+                                  UINT32_MAX) &&
+                 image_matches(factory, path, source, 5, 3);
+
+    BYTE replacement[sizeof(source)];
+    memcpy(replacement, source, sizeof(source));
+    for (size_t i = 0; i < sizeof(replacement); i += 4)
+        replacement[i] ^= 0xff;
+    if (ok) ok = golden_png_save(factory, path, replacement, 5, 3, 20) &&
+                 image_matches(factory, path, replacement, 5, 3);
+
+    wchar_t pattern[MAX_PATH * 2];
+    _snwprintf(pattern, _countof(pattern), L"%ls.goldens-*.tmp", path);
+    WIN32_FIND_DATAW found;
+    HANDLE search = FindFirstFileW(pattern, &found);
+    if (search != INVALID_HANDLE_VALUE) {
+        ok = FALSE;
+        FindClose(search);
+    }
+    DeleteFileW(path);
+    if (!ok) fwprintf(stderr, L"atomic PNG replacement test failed\n");
+    return ok;
+}
+
 int wmain(void) {
     if (FAILED(CoInitializeEx(NULL, COINIT_APARTMENTTHREADED))) return 1;
     IWICImagingFactory *factory = NULL;
@@ -331,9 +376,9 @@ int wmain(void) {
         CoUninitialize();
         return 2;
     }
-
     BOOL ok = test_encoder(factory) && test_pngsuite(factory) &&
-              test_invalid_inputs(factory) && test_opaque_normalization();
+              test_atomic_replacement(factory) && test_invalid_inputs(factory) &&
+              test_opaque_normalization();
     IWICImagingFactory_Release(factory);
     CoUninitialize();
     if (!ok) return 1;

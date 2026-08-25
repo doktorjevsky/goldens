@@ -27,6 +27,80 @@ static char *read_bytes(const wchar_t *path, size_t *length) {
     return data;
 }
 
+typedef struct {
+    int calls;
+    unsigned failures;
+} MoveContext;
+
+static BOOL controlled_move(const wchar_t *source, const wchar_t *destination,
+                            DWORD flags, void *opaque) {
+    MoveContext *context = (MoveContext *)opaque;
+    int call = ++context->calls;
+    if (context->failures & (1u << call)) {
+        SetLastError(ERROR_ACCESS_DENIED);
+        return FALSE;
+    }
+    return MoveFileExW(source, destination, flags);
+}
+
+static int make_pair(const wchar_t *directory, const wchar_t *stem,
+                     wchar_t *old_png, wchar_t *new_png,
+                     wchar_t *old_json, wchar_t *new_json) {
+    _snwprintf(old_png, MAX_PATH, L"%s\\%s-before.png", directory, stem);
+    _snwprintf(new_png, MAX_PATH, L"%s\\%s-after.png", directory, stem);
+    golden_resource_json_path(old_png, old_json, MAX_PATH);
+    golden_resource_json_path(new_png, new_json, MAX_PATH);
+    return write_bytes(old_png, "png", 3) && write_bytes(old_json, "json", 4);
+}
+
+static int test_json_failure_rolls_back(const wchar_t *directory) {
+    wchar_t old_png[MAX_PATH], new_png[MAX_PATH], old_json[MAX_PATH], new_json[MAX_PATH];
+    if (!make_pair(directory, L"rollback", old_png, new_png, old_json, new_json)) return 1;
+    MoveContext context = {0, 1u << 2};
+    GoldenResourceRenameResult result = golden_rename_resource_pair_with_move(
+        old_png, new_png, controlled_move, &context);
+    int failed = result != GOLDEN_RENAME_JSON_FAILED_ROLLED_BACK ||
+        context.calls != 3 ||
+        GetFileAttributesW(old_png) == INVALID_FILE_ATTRIBUTES ||
+        GetFileAttributesW(old_json) == INVALID_FILE_ATTRIBUTES ||
+        GetFileAttributesW(new_png) != INVALID_FILE_ATTRIBUTES ||
+        GetFileAttributesW(new_json) != INVALID_FILE_ATTRIBUTES;
+    DeleteFileW(old_png); DeleteFileW(old_json);
+    DeleteFileW(new_png); DeleteFileW(new_json);
+    return failed;
+}
+
+static int test_rollback_failure_is_reported(const wchar_t *directory) {
+    wchar_t old_png[MAX_PATH], new_png[MAX_PATH], old_json[MAX_PATH], new_json[MAX_PATH];
+    if (!make_pair(directory, L"rollback-fails", old_png, new_png, old_json, new_json)) return 1;
+    MoveContext context = {0, (1u << 2) | (1u << 3)};
+    GoldenResourceRenameResult result = golden_rename_resource_pair_with_move(
+        old_png, new_png, controlled_move, &context);
+    int failed = result != GOLDEN_RENAME_ROLLBACK_FAILED || context.calls != 3 ||
+        GetFileAttributesW(old_png) != INVALID_FILE_ATTRIBUTES ||
+        GetFileAttributesW(old_json) == INVALID_FILE_ATTRIBUTES ||
+        GetFileAttributesW(new_png) == INVALID_FILE_ATTRIBUTES ||
+        GetFileAttributesW(new_json) != INVALID_FILE_ATTRIBUTES;
+    DeleteFileW(old_png); DeleteFileW(old_json);
+    DeleteFileW(new_png); DeleteFileW(new_json);
+    return failed;
+}
+
+static int test_first_move_failure_is_reported(const wchar_t *directory) {
+    wchar_t old_png[MAX_PATH], new_png[MAX_PATH], old_json[MAX_PATH], new_json[MAX_PATH];
+    if (!make_pair(directory, L"first-fails", old_png, new_png, old_json, new_json)) return 1;
+    MoveContext context = {0, 1u << 1};
+    GoldenResourceRenameResult result = golden_rename_resource_pair_with_move(
+        old_png, new_png, controlled_move, &context);
+    int failed = result != GOLDEN_RENAME_PNG_FAILED || context.calls != 1 ||
+        GetFileAttributesW(old_png) == INVALID_FILE_ATTRIBUTES ||
+        GetFileAttributesW(old_json) == INVALID_FILE_ATTRIBUTES ||
+        GetFileAttributesW(new_png) != INVALID_FILE_ATTRIBUTES;
+    DeleteFileW(old_png); DeleteFileW(old_json);
+    DeleteFileW(new_png); DeleteFileW(new_json);
+    return failed;
+}
+
 int main(void) {
     wchar_t temporary[MAX_PATH], seed[MAX_PATH], directory[MAX_PATH];
     if (!GetTempPathW(_countof(temporary), temporary) ||
@@ -72,6 +146,10 @@ int main(void) {
     _snwprintf(collision_png, _countof(collision_png), L"%s\\collision.png", directory);
     if (!failed) failed = !write_bytes(collision_png, png, sizeof(png)) ||
         golden_rename_resource_pair(new_png, collision_png) != GOLDEN_RENAME_PNG_EXISTS;
+
+    if (!failed) failed = test_json_failure_rolls_back(directory);
+    if (!failed) failed = test_rollback_failure_is_reported(directory);
+    if (!failed) failed = test_first_move_failure_is_reported(directory);
 
     DeleteFileW(old_png); DeleteFileW(old_json);
     DeleteFileW(new_png); DeleteFileW(new_json); DeleteFileW(collision_png);
