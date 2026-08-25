@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import subprocess
 from pathlib import Path
 
 import cv2
@@ -21,9 +22,21 @@ def main() -> None:
     parser.add_argument("--click-y", type=float, default=0.5)
     parser.add_argument("--threshold", type=float, default=0.92)
     parser.add_argument("--timeout", type=float, default=2.0)
+    parser.add_argument("--start", help="Executable to start before finding the window")
+    parser.add_argument(
+        "--start-arg",
+        action="append",
+        default=[],
+        help="Argument for --start; may be supplied more than once",
+    )
     args = parser.parse_args()
 
     win32.enable_per_monitor_dpi_awareness()
+
+    process = None
+    if args.start is not None:
+        process = subprocess.Popen([args.start, *args.start_arg])
+        print(f"Started process {process.pid}: {args.start}")
 
     print("Visible top-level windows:")
     for item in Window.list():
@@ -31,6 +44,7 @@ def main() -> None:
 
     window = Window.find(
         re.compile(args.window, re.IGNORECASE),
+        process_id=process.pid if process is not None else None,
         timeout=args.timeout,
     )
     window.focus(timeout=args.timeout)

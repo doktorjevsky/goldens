@@ -19,6 +19,7 @@ py -m pip install -e .
 
 ```python
 import re
+import subprocess
 
 import cv2
 
@@ -26,7 +27,12 @@ from litewinwrap import Target, Window, keyboard, match, win32
 
 win32.enable_per_monitor_dpi_awareness()
 
-window = Window.find(re.compile("Calculator", re.IGNORECASE), timeout=2.0)
+process = subprocess.Popen([r"C:\path\to\application.exe", "--example-argument"])
+window = Window.find(
+    re.compile("Application title", re.IGNORECASE),
+    process_id=process.pid,
+    timeout=5.0,
+)
 window.focus()
 
 pixels = cv2.imread("button_8.png", cv2.IMREAD_COLOR)
@@ -37,6 +43,21 @@ print(found.score, found.rect, found.click)
 keyboard.write("123")
 ```
 
+`subprocess.Popen` is part of Python's standard library and is deliberately not
+wrapped. Pass an argument list to launch an executable directly. The returned
+object exposes the PID, exit status, `wait`, `terminate`, and the standard I/O
+streams. `Window.find(..., process_id=process.pid)` can wait for the process to
+create its top-level window.
+
+`cmd.exe` is unnecessary for ordinary executables. Invoke it explicitly only
+when the command actually needs shell syntax or a built-in command:
+
+```python
+subprocess.Popen(["cmd.exe", "/d", "/s", "/c", "your shell command"])
+```
+
+Avoid `shell=True` for values assembled from external input.
+
 `match.click` captures the window from the physical screen, matches the cropped
 annotation, sends a click to its saved normalized click point, and returns the
 `Match` that was clicked.
@@ -45,6 +66,8 @@ Screen capture intentionally reflects what is visible on the desktop. Keep the
 interactive desktop unlocked and the target window unobscured.
 
 See [`examples/steer_window.py`](examples/steer_window.py) for a runnable script.
+Its optional `--start` and repeatable `--start-arg` arguments launch the target
+before looking for its window.
 
 ## Tests
 
