@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+import time
 from pathlib import Path
 
 from litewinwrap import Goldens, Window, win32
@@ -29,6 +30,9 @@ def main() -> None:
             timeout=2.0,
         )
     print("Pressed button_1 six times")
+
+    # SendInput completes before the target application is required to repaint.
+    time.sleep(0.25)
 
     try:
         calculator.find_target(
