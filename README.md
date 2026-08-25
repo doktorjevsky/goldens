@@ -113,7 +113,8 @@ from compact to wide and 100–200% DPI, version-compatible native tooltip
 registration and positioning, DPI-scaled tool icon rasterization, transactional
 PNG/JSON renames including rollback failure, atomic-write failure preservation,
 lossless BGRA PNG encode/decode and replacement, reusable preview capture
-surfaces, latest-request coalescing, stale-result rejection, persistent-worker
+surfaces with removal of invisible resize-border pixels from `PrintWindow`
+frames, latest-request coalescing, stale-result rejection, persistent-worker
 reuse, failure recovery, and bounded preview shutdown.
 
 Run `install-hooks.bat` once after cloning. It configures the versioned

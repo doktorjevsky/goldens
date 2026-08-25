@@ -7,6 +7,10 @@ typedef BOOL (*GoldenPreviewRenderer)(HWND window, HDC destination,
                                       const RECT *bounds, BYTE *pixels,
                                       int width, int height, void *context);
 
+/* Maps the visible DWM bounds into a bitmap rendered for GetWindowRect. */
+BOOL golden_preview_source_rect(const RECT *window_bounds,
+                                const RECT *visible_bounds, RECT *source);
+
 typedef struct {
     HDC memory;
     HBITMAP bitmap;
@@ -15,6 +19,8 @@ typedef struct {
     UINT width;
     UINT height;
     UINT stride;
+    UINT bitmap_width;
+    UINT bitmap_height;
 } GoldenPreviewSurface;
 
 BOOL golden_preview_surface_capture(GoldenPreviewSurface *surface, HWND window);
@@ -27,7 +33,7 @@ void golden_preview_surface_release(GoldenPreviewSurface *surface);
 /* Captures a top-level window without changing its placement or activation. */
 BOOL golden_capture_window_preview(HWND window, GoldenImage *image);
 
-/* Compatibility wrapper that returns an independently owned pixel copy. */
+/* Compatibility wrapper returning a cropped, independently owned pixel copy. */
 BOOL golden_capture_window_preview_with_renderer(HWND window, GoldenImage *image,
                                                  GoldenPreviewRenderer renderer,
                                                  void *context);
