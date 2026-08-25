@@ -18,6 +18,25 @@ static BOOL pixels_have_content(const BYTE *pixels, int width, int height) {
     return FALSE;
 }
 
+BOOL golden_preview_source_rect(const RECT *window_bounds,
+                                const RECT *visible_bounds, RECT *source) {
+    if (!window_bounds || !visible_bounds || !source ||
+        window_bounds->right <= window_bounds->left ||
+        window_bounds->bottom <= window_bounds->top ||
+        visible_bounds->right <= visible_bounds->left ||
+        visible_bounds->bottom <= visible_bounds->top ||
+        visible_bounds->left < window_bounds->left ||
+        visible_bounds->top < window_bounds->top ||
+        visible_bounds->right > window_bounds->right ||
+        visible_bounds->bottom > window_bounds->bottom)
+        return FALSE;
+    source->left = visible_bounds->left - window_bounds->left;
+    source->top = visible_bounds->top - window_bounds->top;
+    source->right = visible_bounds->right - window_bounds->left;
+    source->bottom = visible_bounds->bottom - window_bounds->top;
+    return TRUE;
+}
+
 static BOOL render_window(HWND window, HDC destination, const RECT *bounds,
                           BYTE *pixels, int width, int height, void *context) {
     UNREFERENCED_PARAMETER(context);
@@ -38,19 +57,20 @@ static BOOL render_window(HWND window, HDC destination, const RECT *bounds,
     return rendered;
 }
 
-BOOL golden_capture_window_preview_with_renderer(HWND window, GoldenImage *image,
-                                                 GoldenPreviewRenderer renderer,
-                                                 void *context) {
+static BOOL capture_window_preview(HWND window, const RECT *window_bounds,
+                                   const RECT *visible_bounds, GoldenImage *image,
+                                   GoldenPreviewRenderer renderer, void *context) {
     if (!image) return FALSE;
     ZeroMemory(image, sizeof(*image));
-    if (!window || !IsWindow(window) || !renderer) return FALSE;
+    if (!window || !IsWindow(window) || !window_bounds || !visible_bounds || !renderer)
+        return FALSE;
 
-    RECT bounds = {0};
-    if (FAILED(DwmGetWindowAttribute(window, DWMWA_EXTENDED_FRAME_BOUNDS,
-                                     &bounds, sizeof(bounds))))
-        GetWindowRect(window, &bounds);
-    int width = bounds.right - bounds.left;
-    int height = bounds.bottom - bounds.top;
+    RECT source = {0};
+    if (!golden_preview_source_rect(window_bounds, visible_bounds, &source)) return FALSE;
+    int width = window_bounds->right - window_bounds->left;
+    int height = window_bounds->bottom - window_bounds->top;
+    int output_width = source.right - source.left;
+    int output_height = source.bottom - source.top;
     if (width <= 0 || height <= 0 || width > 32768 || height > 32768) return FALSE;
 
     HDC screen = GetDC(NULL);
@@ -68,15 +88,21 @@ BOOL golden_capture_window_preview_with_renderer(HWND window, GoldenImage *image
     BOOL rendered = FALSE;
     if (memory && bitmap && dib_pixels) {
         HGDIOBJ previous = SelectObject(memory, bitmap);
-        rendered = renderer(window, memory, &bounds, dib_pixels, width, height, context);
+        rendered = renderer(window, memory, window_bounds, dib_pixels, width, height, context);
         if (rendered) {
-            size_t bytes = (size_t)width * (size_t)height * 4;
+            size_t stride = (size_t)output_width * 4;
+            size_t bytes = stride * (size_t)output_height;
             image->pixels = (BYTE *)malloc(bytes);
             if (image->pixels) {
-                memcpy(image->pixels, dib_pixels, bytes);
-                image->width = (UINT)width;
-                image->height = (UINT)height;
-                image->stride = (UINT)width * 4;
+                size_t render_stride = (size_t)width * 4;
+                const BYTE *row = dib_pixels + (size_t)source.top * render_stride +
+                                  (size_t)source.left * 4;
+                for (int y = 0; y < output_height; ++y)
+                    memcpy(image->pixels + (size_t)y * stride,
+                           row + (size_t)y * render_stride, stride);
+                image->width = (UINT)output_width;
+                image->height = (UINT)output_height;
+                image->stride = (UINT)stride;
             } else rendered = FALSE;
         }
         SelectObject(memory, previous);
@@ -86,6 +112,29 @@ BOOL golden_capture_window_preview_with_renderer(HWND window, GoldenImage *image
     if (screen) ReleaseDC(NULL, screen);
     if (!rendered) golden_image_free(image);
     return rendered;
+}
+
+static BOOL preview_bounds(HWND window, RECT *window_bounds, RECT *visible_bounds) {
+    if (!GetWindowRect(window, window_bounds)) return FALSE;
+    *visible_bounds = *window_bounds;
+    RECT dwm_bounds = {0}, source = {0};
+    if (SUCCEEDED(DwmGetWindowAttribute(window, DWMWA_EXTENDED_FRAME_BOUNDS,
+                                        &dwm_bounds, sizeof(dwm_bounds))) &&
+        golden_preview_source_rect(window_bounds, &dwm_bounds, &source))
+        *visible_bounds = dwm_bounds;
+    return TRUE;
+}
+
+BOOL golden_capture_window_preview_with_renderer(HWND window, GoldenImage *image,
+                                                 GoldenPreviewRenderer renderer,
+                                                 void *context) {
+    if (!image) return FALSE;
+    ZeroMemory(image, sizeof(*image));
+    if (!window || !IsWindow(window) || !renderer) return FALSE;
+    RECT window_bounds = {0}, visible_bounds = {0};
+    if (!preview_bounds(window, &window_bounds, &visible_bounds)) return FALSE;
+    return capture_window_preview(window, &window_bounds, &visible_bounds,
+                                  image, renderer, context);
 }
 
 BOOL golden_capture_window_preview(HWND window, GoldenImage *image) {

@@ -98,7 +98,8 @@ exact 1:1 GDI rendering, overlay ordering, custom and collapsed column layouts
 from compact to wide and 100–200% DPI, version-compatible native tooltip
 registration and positioning, DPI-scaled tool icon rasterization, transactional
 PNG/JSON renames with post-rename saves, lossless BGRA PNG encode/decode, and
-the window-preview allocation/copy pipeline.
+the window-preview allocation/copy pipeline, including removal of invisible
+resize-border pixels from `PrintWindow` frames.
 
 Run `install-hooks.bat` once after cloning. It configures the versioned
 `.githooks` directory. Both pre-commit and pre-push run the complete Windows
