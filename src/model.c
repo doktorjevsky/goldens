@@ -75,6 +75,27 @@ GoldenViewport golden_compute_viewport(int image_width, int image_height,
     return result;
 }
 
+static LONG round_to_long(double value) {
+    return (LONG)(value >= 0.0 ? value + 0.5 : value - 0.5);
+}
+
+POINT golden_zoom_anchor_pan(const GoldenViewport *current,
+                             const GoldenViewport *centered_zoom,
+                             POINT client_anchor) {
+    POINT pan = {0, 0};
+    if (!current || !centered_zoom || current->scale <= 0.0 ||
+        centered_zoom->scale <= 0.0) return pan;
+    double image_x = (client_anchor.x - current->destination.left) /
+                     current->scale;
+    double image_y = (client_anchor.y - current->destination.top) /
+                     current->scale;
+    pan.x = round_to_long(client_anchor.x - image_x * centered_zoom->scale -
+                         centered_zoom->destination.left);
+    pan.y = round_to_long(client_anchor.y - image_y * centered_zoom->scale -
+                         centered_zoom->destination.top);
+    return pan;
+}
+
 BOOL golden_view_to_image(const GoldenViewport *viewport, POINT client,
                           int image_width, int image_height, POINT *image) {
     if (!viewport || !image || viewport->scale <= 0.0 ||

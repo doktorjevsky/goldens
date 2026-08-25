@@ -8,7 +8,6 @@ The toolbar icons in `assets/icons` are copied from
 - Cursor 20 Regular
 - Rectangle Landscape 20 Regular
 - Target 20 Regular
-- Hand Left 20 Regular
 
 MIT License
 

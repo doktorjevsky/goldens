@@ -75,7 +75,7 @@ GoldenUiLayout golden_compute_ui_layout(int width, int height, UINT dpi,
 
     int tool_x = editor_x + golden_scale_ui(4, dpi);
     int tool_size = golden_scale_ui(26, dpi);
-    for (int i = 0; i < 4; ++i) {
+    for (int i = 0; i < GOLDEN_TOOL_BUTTON_COUNT; ++i) {
         layout.tool_buttons[i] = make_rect(tool_x, golden_scale_ui(4, dpi),
             tool_size, tool_size);
         tool_x = layout.tool_buttons[i].right + golden_scale_ui(3, dpi);

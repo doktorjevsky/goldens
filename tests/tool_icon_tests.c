@@ -44,7 +44,7 @@ int main(void) {
     for (int dpi_index = 0; dpi_index < 2; ++dpi_index) {
         UINT dpi = dpi_index ? 192 : 96;
         for (int icon = GOLDEN_TOOL_ICON_SELECT;
-             icon <= GOLDEN_TOOL_ICON_HAND; ++icon) {
+             icon <= GOLDEN_TOOL_ICON_CLICK; ++icon) {
             for (int i = 0; i < width * height; ++i) pixels[i] = 0x00ffffff;
             golden_draw_tool_icon(dc, (GoldenToolIcon)icon, &bounds,
                                   RGB(12, 34, 56), dpi);

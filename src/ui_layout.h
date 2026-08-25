@@ -11,12 +11,13 @@
 #define GOLDEN_SPLITTER_WIDTH 10
 #define GOLDEN_COLLAPSED_SPLITTER_WIDTH 16
 #define GOLDEN_WINDOW_BUTTON_RIGHT_INSET 6
+#define GOLDEN_TOOL_BUTTON_COUNT 3
 #define GOLDEN_VIEW_BUTTON_COUNT 3
 
 typedef struct {
     RECT resource_tree;
     RECT left_splitter;
-    RECT tool_buttons[4];
+    RECT tool_buttons[GOLDEN_TOOL_BUTTON_COUNT];
     RECT context_label;
     RECT editor;
     RECT view_buttons[GOLDEN_VIEW_BUTTON_COUNT];
