@@ -47,22 +47,37 @@ class WindowTests(unittest.TestCase):
         with (
             patch("litewinwrap.match.capture", return_value=capture) as screenshot,
             patch("litewinwrap.match.find", return_value=found) as find,
+            patch("litewinwrap.match.find_best", return_value=found) as find_best,
             patch("litewinwrap.match.find_all", return_value=(found,)) as find_all,
             patch("litewinwrap.match.click", return_value=found) as click,
+            patch("litewinwrap.match.click_best", return_value=found) as click_best,
         ):
             self.assertIs(window.screenshot(), capture)
             self.assertIs(window.find_target(target, timeout=2.0), found)
+            self.assertIs(window.find_best_target(target, timeout=2.0), found)
             self.assertEqual(window.find_targets(target, timeout=2.0), (found,))
             self.assertIs(window.click_target(target, timeout=2.0), found)
+            self.assertIs(window.click_best_target(target, timeout=2.0), found)
 
         screenshot.assert_called_once_with(HWND(123))
         find.assert_called_once_with(
+            HWND(123), target, threshold=0.9, timeout=2.0, overlap=0.3
+        )
+        find_best.assert_called_once_with(
             HWND(123), target, threshold=0.9, timeout=2.0, overlap=0.3
         )
         find_all.assert_called_once_with(
             HWND(123), target, threshold=0.9, timeout=2.0, overlap=0.3
         )
         click.assert_called_once_with(
+            HWND(123),
+            target,
+            threshold=0.9,
+            timeout=2.0,
+            overlap=0.3,
+            button="left",
+        )
+        click_best.assert_called_once_with(
             HWND(123),
             target,
             threshold=0.9,

@@ -223,8 +223,7 @@ class Window:
             raise WindowAmbiguousError(matches)
         selectors = _describe_selectors(title, class_name)
         raise WindowNotFoundError(
-            f"No child of {int(self.hwnd)} matched {selectors} "
-            f"within {timeout:.3f}s"
+            f"No child of {int(self.hwnd)} matched {selectors} within {timeout:.3f}s"
         )
 
     def screenshot(self) -> Capture:
@@ -268,6 +267,24 @@ class Window:
             overlap=overlap,
         )
 
+    def find_best_target(
+        self,
+        target: Target,
+        *,
+        threshold: float = 0.90,
+        timeout: float = 0.0,
+        overlap: float = 0.30,
+    ) -> Match:
+        from . import match as image_match
+
+        return image_match.find_best(
+            self.hwnd,
+            target,
+            threshold=threshold,
+            timeout=timeout,
+            overlap=overlap,
+        )
+
     def click_target(
         self,
         target: Target,
@@ -280,6 +297,26 @@ class Window:
         from . import match as image_match
 
         return image_match.click(
+            self.hwnd,
+            target,
+            threshold=threshold,
+            timeout=timeout,
+            overlap=overlap,
+            button=button,
+        )
+
+    def click_best_target(
+        self,
+        target: Target,
+        *,
+        threshold: float = 0.90,
+        timeout: float = 0.0,
+        overlap: float = 0.30,
+        button: Button = "left",
+    ) -> Match:
+        from . import match as image_match
+
+        return image_match.click_best(
             self.hwnd,
             target,
             threshold=threshold,

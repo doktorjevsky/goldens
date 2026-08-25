@@ -51,6 +51,13 @@ targets.items()
 
 `Window.screenshot()`, `find_target()`, `find_targets()`, and `click_target()`
 take fresh screenshots and retain no target or match state on the window.
+`find_target()` and `click_target()` require exactly one match and report an
+ambiguity if the target occurs more than once. Use `find_targets()` when every
+occurrence is wanted. Choosing the highest-scoring occurrence is deliberately
+explicit through `find_best_target()` or `click_best_target()`.
+
+The equivalent operations on an existing capture are `match.match()`,
+`match.match_all()`, and `match.best_match()`.
 
 `subprocess.Popen` is part of Python's standard library and is deliberately not
 wrapped. Pass an argument list to launch an executable directly. The returned

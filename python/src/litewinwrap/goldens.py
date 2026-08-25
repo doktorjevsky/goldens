@@ -47,6 +47,65 @@ def _integer(value: dict[str, Any], key: str, name: str) -> int:
     return result
 
 
+def _read_boundary(
+    annotation: dict[str, Any],
+    name: str,
+    image_width: int,
+    image_height: int,
+) -> tuple[int, int, int, int]:
+    boundary = annotation.get("boundary")
+    if not isinstance(boundary, dict):
+        raise GoldensFormatError(f"Annotation {name!r} has no boundary")
+
+    x = _integer(boundary, "x", name)
+    y = _integer(boundary, "y", name)
+    width = _integer(boundary, "width", name)
+    height = _integer(boundary, "height", name)
+    if x < 0 or y < 0 or width <= 0 or height <= 0:
+        raise GoldensFormatError(f"Annotation {name!r} has an invalid boundary")
+    if x + width > image_width or y + height > image_height:
+        raise GoldensFormatError(
+            f"Annotation {name!r} extends outside the golden image"
+        )
+    return x, y, width, height
+
+
+def _read_click(annotation: dict[str, Any], name: str) -> tuple[float, float] | None:
+    value = annotation.get("click")
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise GoldensFormatError(f"Annotation {name!r} has an invalid click point")
+
+    x = value.get("x")
+    y = value.get("y")
+    if (
+        not isinstance(x, (int, float))
+        or isinstance(x, bool)
+        or not isinstance(y, (int, float))
+        or isinstance(y, bool)
+        or not 0.0 <= float(x) <= 1.0
+        or not 0.0 <= float(y) <= 1.0
+    ):
+        raise GoldensFormatError(f"Annotation {name!r} has an invalid click point")
+    return float(x), float(y)
+
+
+def _read_target(image: np.ndarray, value: Any, index: int) -> Target:
+    if not isinstance(value, dict):
+        raise GoldensFormatError(f"Annotation {index} must be an object")
+
+    name = value.get("name")
+    if not isinstance(name, str) or not name:
+        raise GoldensFormatError(f"Annotation {index} has an invalid name")
+
+    image_height, image_width = image.shape[:2]
+    x, y, width, height = _read_boundary(value, name, image_width, image_height)
+    pixels = image[y : y + height, x : x + width].copy()
+    pixels.setflags(write=False)
+    return Target(name=name, pixels=pixels, click=_read_click(value, name))
+
+
 class Goldens(Mapping[str, Target]):
     """A Goldens PNG/JSON pair exposed as a read-only mapping of targets."""
 
@@ -54,59 +113,13 @@ class Goldens(Mapping[str, Target]):
         self._path = Path(png)
         image = _load_image(self._path)
         document = _load_sidecar(self._path.with_suffix(".json"))
-        image_height, image_width = image.shape[:2]
         targets: dict[str, Target] = {}
 
         for index, value in enumerate(document["annotations"]):
-            if not isinstance(value, dict):
-                raise GoldensFormatError(f"Annotation {index} must be an object")
-            name = value.get("name")
-            if not isinstance(name, str) or not name:
-                raise GoldensFormatError(f"Annotation {index} has an invalid name")
-            if name in targets:
-                raise GoldensFormatError(f"Duplicate annotation name: {name!r}")
-
-            boundary = value.get("boundary")
-            if not isinstance(boundary, dict):
-                raise GoldensFormatError(f"Annotation {name!r} has no boundary")
-            x = _integer(boundary, "x", name)
-            y = _integer(boundary, "y", name)
-            width = _integer(boundary, "width", name)
-            height = _integer(boundary, "height", name)
-            if x < 0 or y < 0 or width <= 0 or height <= 0:
-                raise GoldensFormatError(
-                    f"Annotation {name!r} has an invalid boundary"
-                )
-            if x + width > image_width or y + height > image_height:
-                raise GoldensFormatError(
-                    f"Annotation {name!r} extends outside the golden image"
-                )
-
-            click_value = value.get("click")
-            click: tuple[float, float] | None = None
-            if click_value is not None:
-                if not isinstance(click_value, dict):
-                    raise GoldensFormatError(
-                        f"Annotation {name!r} has an invalid click point"
-                    )
-                click_x = click_value.get("x")
-                click_y = click_value.get("y")
-                if (
-                    not isinstance(click_x, (int, float))
-                    or isinstance(click_x, bool)
-                    or not isinstance(click_y, (int, float))
-                    or isinstance(click_y, bool)
-                    or not 0.0 <= float(click_x) <= 1.0
-                    or not 0.0 <= float(click_y) <= 1.0
-                ):
-                    raise GoldensFormatError(
-                        f"Annotation {name!r} has an invalid click point"
-                    )
-                click = (float(click_x), float(click_y))
-
-            pixels = image[y : y + height, x : x + width].copy()
-            pixels.setflags(write=False)
-            targets[name] = Target(name=name, pixels=pixels, click=click)
+            target = _read_target(image, value, index)
+            if target.name in targets:
+                raise GoldensFormatError(f"Duplicate annotation name: {target.name!r}")
+            targets[target.name] = target
 
         self._targets = targets
 

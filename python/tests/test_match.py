@@ -4,7 +4,7 @@ import unittest
 
 import numpy as np
 
-from litewinwrap.match import match
+from litewinwrap.match import TargetAmbiguousError, best_match, match, match_all
 from litewinwrap.types import Capture, Point, Rect, Target
 
 
@@ -21,10 +21,9 @@ class MatchTests(unittest.TestCase):
 
         found = match(capture, self.target, threshold=0.99)
 
-        self.assertEqual(len(found), 1)
-        self.assertEqual(found[0].rect, Rect(131, 219, 143, 229))
-        self.assertEqual(found[0].click, Point(134, 226))
-        self.assertGreaterEqual(found[0].score, 0.99)
+        self.assertEqual(found.rect, Rect(131, 219, 143, 229))
+        self.assertEqual(found.click, Point(134, 226))
+        self.assertGreaterEqual(found.score, 0.99)
 
     def test_keeps_distinct_occurrences(self) -> None:
         pixels = np.zeros((60, 80, 3), dtype=np.uint8)
@@ -32,10 +31,32 @@ class MatchTests(unittest.TestCase):
         pixels[35:45, 50:62] = self.template
         capture = Capture(pixels, Rect(0, 0, 80, 60))
 
-        found = match(capture, self.target, threshold=0.99)
+        found = match_all(capture, self.target, threshold=0.99)
 
         self.assertEqual(len(found), 2)
         self.assertEqual({item.rect.left for item in found}, {6, 50})
+
+    def test_match_rejects_multiple_occurrences(self) -> None:
+        pixels = np.zeros((60, 80, 3), dtype=np.uint8)
+        pixels[5:15, 6:18] = self.template
+        pixels[35:45, 50:62] = self.template
+        capture = Capture(pixels, Rect(0, 0, 80, 60))
+
+        with self.assertRaises(TargetAmbiguousError):
+            match(capture, self.target, threshold=0.99)
+
+    def test_best_match_explicitly_selects_highest_score(self) -> None:
+        pixels = np.zeros((60, 80, 3), dtype=np.uint8)
+        pixels[5:15, 6:18] = self.template
+        imperfect = self.template.copy()
+        imperfect[:2, :2] = 0
+        pixels[35:45, 50:62] = imperfect
+        capture = Capture(pixels, Rect(0, 0, 80, 60))
+
+        found = best_match(capture, self.target, threshold=0.80)
+
+        self.assertEqual(found.rect, Rect(6, 5, 18, 15))
+        self.assertAlmostEqual(found.score, 1.0)
 
 
 if __name__ == "__main__":

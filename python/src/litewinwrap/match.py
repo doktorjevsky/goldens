@@ -85,7 +85,9 @@ def _validate(capture_value: Capture, target: Target, threshold: float) -> None:
             f"Target {target_width}x{target_height} is larger than "
             f"capture {image_width}x{image_height}"
         )
-    if target.click is not None and not all(0.0 <= value <= 1.0 for value in target.click):
+    if target.click is not None and not all(
+        0.0 <= value <= 1.0 for value in target.click
+    ):
         raise ValueError("Target click coordinates must be between 0 and 1")
 
 
@@ -109,8 +111,12 @@ def _score_map(capture_value: Capture, target: Target) -> np.ndarray:
 
 
 def _intersection_over_union(left: Rect, right: Rect) -> float:
-    intersection_width = max(0, min(left.right, right.right) - max(left.left, right.left))
-    intersection_height = max(0, min(left.bottom, right.bottom) - max(left.top, right.top))
+    intersection_width = max(
+        0, min(left.right, right.right) - max(left.left, right.left)
+    )
+    intersection_height = max(
+        0, min(left.bottom, right.bottom) - max(left.top, right.top)
+    )
     intersection = intersection_width * intersection_height
     if not intersection:
         return 0.0
@@ -119,7 +125,7 @@ def _intersection_over_union(left: Rect, right: Rect) -> float:
     return intersection / (left_area + right_area - intersection)
 
 
-def _match_with_best_score(
+def _matches_and_best_score(
     capture_value: Capture,
     target: Target,
     *,
@@ -157,8 +163,12 @@ def _match_with_best_score(
             continue
 
         point = Point(
-            min(rect.right - 1, max(rect.left, rect.left + int(target_width * click_x))),
-            min(rect.bottom - 1, max(rect.top, rect.top + int(target_height * click_y))),
+            min(
+                rect.right - 1, max(rect.left, rect.left + int(target_width * click_x))
+            ),
+            min(
+                rect.bottom - 1, max(rect.top, rect.top + int(target_height * click_y))
+            ),
         )
         matches.append(
             Match(
@@ -171,7 +181,7 @@ def _match_with_best_score(
     return tuple(matches), best_score
 
 
-def match(
+def match_all(
     capture_value: Capture,
     target: Target,
     *,
@@ -179,9 +189,9 @@ def match(
     overlap: float = 0.30,
     max_candidates: int = 10_000,
 ) -> tuple[Match, ...]:
-    """Match a target in an existing capture without touching the desktop."""
+    """Return every distinct target match in an existing capture."""
 
-    matches, _best_score = _match_with_best_score(
+    matches, _best_score = _matches_and_best_score(
         capture_value,
         target,
         threshold=threshold,
@@ -189,6 +199,68 @@ def match(
         max_candidates=max_candidates,
     )
     return matches
+
+
+def _not_found(
+    capture_value: Capture,
+    target: Target,
+    threshold: float,
+    best_score: float,
+) -> TargetNotFoundError:
+    return TargetNotFoundError(
+        target,
+        threshold=threshold,
+        best_score=best_score,
+        elapsed=0.0,
+        attempts=1,
+        last_capture=capture_value,
+    )
+
+
+def match(
+    capture_value: Capture,
+    target: Target,
+    *,
+    threshold: float = 0.90,
+    overlap: float = 0.30,
+    max_candidates: int = 10_000,
+) -> Match:
+    """Return the only target match, rejecting zero or multiple matches."""
+
+    matches, best_score = _matches_and_best_score(
+        capture_value,
+        target,
+        threshold=threshold,
+        overlap=overlap,
+        max_candidates=max_candidates,
+    )
+    if len(matches) == 1:
+        return matches[0]
+    if matches:
+        raise TargetAmbiguousError(target, matches)
+    raise _not_found(capture_value, target, threshold, best_score)
+
+
+def best_match(
+    capture_value: Capture,
+    target: Target,
+    *,
+    threshold: float = 0.90,
+    overlap: float = 0.30,
+    max_candidates: int = 10_000,
+) -> Match:
+    """Return the highest-scoring target match in an existing capture."""
+
+    matches, best_score = _matches_and_best_score(
+        capture_value,
+        target,
+        threshold=threshold,
+        overlap=overlap,
+        max_candidates=max_candidates,
+    )
+    if matches:
+        return matches[0]
+    raise _not_found(capture_value, target, threshold, best_score)
 
 
 def find_all(
@@ -202,7 +274,7 @@ def find_all(
     deadline = time.monotonic() + max(0.0, timeout)
     while True:
         current = capture(window)
-        matches, _best_score = _match_with_best_score(
+        matches, _best_score = _matches_and_best_score(
             current,
             target,
             threshold=threshold,
@@ -235,7 +307,7 @@ def find(
     while True:
         last_capture = capture(window)
         attempts += 1
-        matches, current_best = _match_with_best_score(
+        matches, current_best = _matches_and_best_score(
             last_capture,
             target,
             threshold=threshold,
@@ -262,6 +334,48 @@ def find(
         time.sleep(min(_POLL_INTERVAL, remaining))
 
 
+def find_best(
+    window: Window | HWND | int,
+    target: Target,
+    *,
+    threshold: float = 0.90,
+    timeout: float = 0.0,
+    overlap: float = 0.30,
+) -> Match:
+    started = time.monotonic()
+    deadline = started + max(0.0, timeout)
+    best_score = -1.0
+    attempts = 0
+    last_capture: Capture | None = None
+
+    while True:
+        last_capture = capture(window)
+        attempts += 1
+        matches, current_best = _matches_and_best_score(
+            last_capture,
+            target,
+            threshold=threshold,
+            overlap=overlap,
+            max_candidates=10_000,
+        )
+        best_score = max(best_score, current_best)
+        if matches:
+            return matches[0]
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            elapsed = time.monotonic() - started
+            raise TargetNotFoundError(
+                target,
+                threshold=threshold,
+                best_score=best_score,
+                elapsed=elapsed,
+                attempts=attempts,
+                last_capture=last_capture,
+            )
+        time.sleep(min(_POLL_INTERVAL, remaining))
+
+
 def click(
     window: Window | HWND | int,
     target: Target,
@@ -272,6 +386,26 @@ def click(
     button: mouse.Button = "left",
 ) -> Match:
     found = find(
+        window,
+        target,
+        threshold=threshold,
+        timeout=timeout,
+        overlap=overlap,
+    )
+    mouse.click(found.click, button=button)
+    return found
+
+
+def click_best(
+    window: Window | HWND | int,
+    target: Target,
+    *,
+    threshold: float = 0.90,
+    timeout: float = 0.0,
+    overlap: float = 0.30,
+    button: mouse.Button = "left",
+) -> Match:
+    found = find_best(
         window,
         target,
         threshold=threshold,
