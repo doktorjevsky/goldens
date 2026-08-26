@@ -156,9 +156,13 @@ static BOOL compare_bgra_to_rgba(const BYTE *bgra, UINT bgra_stride,
                 (abs((int)b[0] - r[2]) > (int)tolerance ||
                  abs((int)b[1] - r[1]) > (int)tolerance ||
                  abs((int)b[2] - r[0]) > (int)tolerance);
-            if (color_mismatch ||
-                abs((int)b[3] - r[3]) > (int)tolerance) {
-                fwprintf(stderr, L"pixel mismatch in %ls at %u,%u\n", label, x, y);
+            BOOL alpha_mismatch = abs((int)b[3] - r[3]) > (int)tolerance;
+            if (alpha_mismatch || color_mismatch) {
+                fwprintf(stderr,
+                         L"pixel mismatch in %ls at %u,%u: "
+                         L"WIC BGRA=(%u,%u,%u,%u), reference RGBA=(%u,%u,%u,%u)\n",
+                         label, x, y, b[0], b[1], b[2], b[3],
+                         r[0], r[1], r[2], r[3]);
                 return FALSE;
             }
         }

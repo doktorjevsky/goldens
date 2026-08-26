@@ -43,14 +43,42 @@ static BOOL controlled_move(const wchar_t *source, const wchar_t *destination,
     return MoveFileExW(source, destination, flags);
 }
 
+static int test_checked_paths(void) {
+    wchar_t path[64];
+    wchar_t too_small[9] = L"sentinel";
+    int failed =
+        !golden_path_copy(L"C:\\root", path, _countof(path)) ||
+        wcscmp(path, L"C:\\root") ||
+        golden_path_copy(L"C:\\root", too_small, 7) ||
+        too_small[0] != 0 ||
+        !golden_path_join(L"C:\\root", L"image.png", path, _countof(path)) ||
+        wcscmp(path, L"C:\\root\\image.png") ||
+        !golden_path_join(L"C:\\root\\", L"image.png", path, _countof(path)) ||
+        wcscmp(path, L"C:\\root\\image.png") ||
+        !golden_path_join_extension(L"C:\\root", L"image", L".png",
+                                    path, _countof(path)) ||
+        wcscmp(path, L"C:\\root\\image.png") ||
+        golden_path_join_extension(L"C:\\root", L"image", L"png",
+                                   path, _countof(path)) ||
+        path[0] != 0 ||
+        !golden_resource_json_path(L"C:\\root\\image.PNG",
+                                   path, _countof(path)) ||
+        wcscmp(path, L"C:\\root\\image.json") ||
+        golden_resource_json_path(L"C:\\root\\image", path, _countof(path)) ||
+        path[0] != 0 ||
+        golden_resource_json_path(L"foo.png", too_small, 8) ||
+        too_small[0] != 0;
+    return failed;
+}
+
 static int make_pair(const wchar_t *directory, const wchar_t *stem,
                      wchar_t *old_png, wchar_t *new_png,
                      wchar_t *old_json, wchar_t *new_json) {
     _snwprintf(old_png, MAX_PATH, L"%s\\%s-before.png", directory, stem);
     _snwprintf(new_png, MAX_PATH, L"%s\\%s-after.png", directory, stem);
-    golden_resource_json_path(old_png, old_json, MAX_PATH);
-    golden_resource_json_path(new_png, new_json, MAX_PATH);
-    return write_bytes(old_png, "png", 3) && write_bytes(old_json, "json", 4);
+    return golden_resource_json_path(old_png, old_json, MAX_PATH) &&
+        golden_resource_json_path(new_png, new_json, MAX_PATH) &&
+        write_bytes(old_png, "png", 3) && write_bytes(old_json, "json", 4);
 }
 
 static int test_json_failure_rolls_back(const wchar_t *directory) {
@@ -112,16 +140,17 @@ int main(void) {
     wchar_t old_png[MAX_PATH], new_png[MAX_PATH], old_json[MAX_PATH], new_json[MAX_PATH];
     _snwprintf(old_png, _countof(old_png), L"%s\\before.png", directory);
     _snwprintf(new_png, _countof(new_png), L"%s\\after.png", directory);
-    golden_resource_json_path(old_png, old_json, _countof(old_json));
-    golden_resource_json_path(new_png, new_json, _countof(new_json));
+    int failed = test_checked_paths() ||
+        !golden_resource_json_path(old_png, old_json, _countof(old_json)) ||
+        !golden_resource_json_path(new_png, new_json, _countof(new_json));
     BYTE png[] = {1, 2, 3, 4};
     Annotation annotation = {0};
     wcscpy(annotation.name, L"before_save");
     annotation.boundary = (RECT){1, 2, 11, 22};
     size_t json_length = 0;
     char *json = golden_document_serialize_utf8(&annotation, 1, &json_length);
-    int failed = !json || !write_bytes(old_png, png, sizeof(png)) ||
-                 !write_bytes(old_json, json, json_length);
+    failed = failed || !json || !write_bytes(old_png, png, sizeof(png)) ||
+             !write_bytes(old_json, json, json_length);
     free(json);
 
     if (!failed) failed = golden_rename_resource_pair(old_png, new_png) != GOLDEN_RENAME_OK;

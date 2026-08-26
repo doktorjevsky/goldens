@@ -82,66 +82,89 @@ typedef struct {
     BOOL done;
 } PromptState;
 
-static HINSTANCE g_instance;
-static HWND g_main, g_tree, g_editor, g_windows, g_status;
-static HWND g_editor_tooltip, g_tool_tooltip;
-static HWND g_left_splitter, g_right_splitter;
-static HWND g_context_label;
-static HWND g_tool_buttons[GOLDEN_TOOL_BUTTON_COUNT];
-static HWND g_view_buttons[GOLDEN_VIEW_BUTTON_COUNT], g_window_buttons[2];
-static HMENU g_capture_menu;
-static TOOLINFOW g_tool_button_tooltips[GOLDEN_TOOL_BUTTON_COUNT];
-static IWICImagingFactory *g_wic;
-static wchar_t g_root[MAX_PATH * 4];
-static wchar_t g_image_path[MAX_PATH * 4];
-static wchar_t g_current_dir[MAX_PATH * 4];
-static BYTE *g_pixels;
-static UINT g_image_w, g_image_h, g_stride;
-static uint64_t g_image_revision;
-static GoldenBackBuffer g_editor_buffer;
-static GoldenImageCache g_image_cache;
-static GoldenImage g_preview_image;
-static GoldenPreviewService g_preview_service;
-static HWND g_preview_target;
-static wchar_t g_preview_title[256];
-static BOOL g_preview_mode;
-static BOOL g_resource_visible;
-static BOOL g_preview_loading;
-static LONG g_preview_generation;
-static double g_zoom;
-static int g_pan_x, g_pan_y;
-static BOOL g_panning;
-static POINT g_pan_start;
-static int g_pan_origin_x, g_pan_origin_y;
-static Annotation g_annotations[MAX_ANNOTATIONS];
-static int g_annotation_count;
-static int g_selected = -1;
-static BOOL g_dirty;
-static Snapshot g_undo[MAX_HISTORY], g_redo[MAX_HISTORY];
-static int g_undo_count, g_redo_count;
-static int g_drag_mode;
-static POINT g_drag_start;
-static RECT g_drag_original;
-static BOOL g_drawing;
-static POINT g_draw_start, g_draw_current;
-static ToolMode g_tool = TOOL_SELECT;
-static GoldenWindowInfo g_window_items[MAX_WINDOWS];
-static int g_window_count;
-static BOOL g_rebuilding_windows;
-static BOOL g_rebuilding_resources;
-static wchar_t g_pending_resource_selection[MAX_PATH * 4];
-static int g_left_column_width = GOLDEN_RESOURCE_PANE_DEFAULT;
-static int g_right_column_width = GOLDEN_WINDOWS_PANE_DEFAULT;
-static BOOL g_left_collapsed, g_right_collapsed;
-static BOOL g_splitter_dragging;
-static POINT g_splitter_drag_start;
-static int g_splitter_width_start;
-static int g_tooltip_pending = -1;
-static int g_tooltip_visible = -1;
-static BOOL g_editor_mouse_tracking;
-static wchar_t g_tooltip_text[128];
-static TOOLINFOW g_editor_tooltip_tool;
-static int g_hovered_tool = -1;
+typedef struct {
+    HINSTANCE instance;
+    HWND main, tree, editor, windows, status;
+    HWND editor_tooltip, tool_tooltip;
+    HWND left_splitter, right_splitter;
+    HWND context_label;
+    HWND tool_buttons[GOLDEN_TOOL_BUTTON_COUNT];
+    HWND view_buttons[GOLDEN_VIEW_BUTTON_COUNT];
+    HWND window_buttons[2];
+    HMENU capture_menu;
+    TOOLINFOW tool_button_tooltips[GOLDEN_TOOL_BUTTON_COUNT];
+    IWICImagingFactory *wic;
+
+    wchar_t root[MAX_PATH * 4];
+    wchar_t image_path[MAX_PATH * 4];
+    wchar_t current_dir[MAX_PATH * 4];
+    BYTE *pixels;
+    UINT image_w, image_h, stride;
+    uint64_t image_revision;
+    GoldenBackBuffer editor_buffer;
+    GoldenImageCache image_cache;
+
+    GoldenImage preview_image;
+    GoldenPreviewService preview_service;
+    HWND preview_target;
+    wchar_t preview_title[256];
+    BOOL preview_mode;
+    BOOL resource_visible;
+    BOOL preview_loading;
+    LONG preview_generation;
+
+    double zoom;
+    int pan_x, pan_y;
+    BOOL panning;
+    POINT pan_start;
+    int pan_origin_x, pan_origin_y;
+
+    Annotation annotations[MAX_ANNOTATIONS];
+    int annotation_count;
+    int selected;
+    BOOL dirty;
+    Snapshot undo[MAX_HISTORY], redo[MAX_HISTORY];
+    int undo_count, redo_count;
+    int drag_mode;
+    POINT drag_start;
+    RECT drag_original;
+    BOOL drawing;
+    POINT draw_start, draw_current;
+    ToolMode tool;
+
+    GoldenWindowInfo window_items[MAX_WINDOWS];
+    int window_count;
+    BOOL rebuilding_windows;
+    BOOL rebuilding_resources;
+    wchar_t pending_resource_selection[MAX_PATH * 4];
+
+    int left_column_width;
+    int right_column_width;
+    BOOL left_collapsed, right_collapsed;
+    BOOL splitter_dragging;
+    POINT splitter_drag_start;
+    int splitter_width_start;
+
+    int tooltip_pending;
+    int tooltip_visible;
+    BOOL editor_mouse_tracking;
+    wchar_t tooltip_text[128];
+    TOOLINFOW editor_tooltip_tool;
+    int hovered_tool;
+} GoldenAppState;
+
+static GoldenAppState g;
+
+static void initialize_app_state(HINSTANCE instance) {
+    g.instance = instance;
+    g.selected = -1;
+    g.tool = TOOL_SELECT;
+    g.left_column_width = GOLDEN_RESOURCE_PANE_DEFAULT;
+    g.right_column_width = GOLDEN_WINDOWS_PANE_DEFAULT;
+    g.tooltip_pending = -1;
+    g.tooltip_visible = -1;
+    g.hovered_tool = -1;
+}
 
 static LRESULT CALLBACK MainProc(HWND, UINT, WPARAM, LPARAM);
 static LRESULT CALLBACK EditorProc(HWND, UINT, WPARAM, LPARAM);
@@ -167,7 +190,7 @@ static void update_annotation_hover(HWND hwnd, POINT client);
 static void draw_tool_button(const DRAWITEMSTRUCT *item);
 
 static void show_error(const wchar_t *message) {
-    MessageBoxW(g_main, message, APP_NAME, MB_OK | MB_ICONERROR);
+    MessageBoxW(g.main, message, APP_NAME, MB_OK | MB_ICONERROR);
 }
 
 static wchar_t *dup_wide(const wchar_t *value) {
@@ -182,83 +205,81 @@ static BOOL ends_with_png(const wchar_t *path) {
     return n >= 4 && _wcsicmp(path + n - 4, L".png") == 0;
 }
 
-static void json_path_for(const wchar_t *png, wchar_t *out, size_t cap) {
-    golden_resource_json_path(png, out, cap);
+static BOOL json_path_for(const wchar_t *png, wchar_t *out, size_t cap) {
+    return golden_resource_json_path(png, out, cap);
 }
 
-static void parent_dir_for(const wchar_t *path, wchar_t *out, size_t cap) {
-    wcsncpy(out, path, cap - 1);
-    out[cap - 1] = 0;
-    PathRemoveFileSpecW(out);
+static BOOL parent_dir_for(const wchar_t *path, wchar_t *out, size_t cap) {
+    return golden_path_copy(path, out, cap) && PathRemoveFileSpecW(out);
 }
 
 static void update_status(void) {
-    if (!g_status) return;
+    if (!g.status) return;
     wchar_t text[MAX_PATH * 4 + 64];
-    const wchar_t *folder = g_current_dir[0] ? g_current_dir : g_root;
+    const wchar_t *folder = g.current_dir[0] ? g.current_dir : g.root;
     _snwprintf(text, _countof(text), L"  Capture folder: %s", folder[0] ? folder : L"(unavailable)");
-    SetWindowTextW(g_status, text);
+    SetWindowTextW(g.status, text);
 }
 
 static void update_context_label(void) {
-    if (!g_context_label) return;
+    if (!g.context_label) return;
     wchar_t text[MAX_PATH * 4 + 64];
-    if (g_preview_mode)
+    if (g.preview_mode)
         _snwprintf(text, _countof(text), L"  Previewing window  —  %s",
-                   g_preview_title[0] ? g_preview_title : L"Untitled window");
-    else if (g_resource_visible && g_image_path[0])
+                   g.preview_title[0] ? g.preview_title : L"Untitled window");
+    else if (g.resource_visible && g.image_path[0])
         _snwprintf(text, _countof(text), L"  Editing resource  —  %s",
-                   PathFindFileNameW(g_image_path));
+                   PathFindFileNameW(g.image_path));
     else
         wcscpy(text, L"  No resource selected");
-    SetWindowTextW(g_context_label, text);
+    SetWindowTextW(g.context_label, text);
 }
 
 static void snapshot_current(Snapshot *s) {
-    s->count = g_annotation_count;
-    s->selected = g_selected;
-    memcpy(s->items, g_annotations,
-           sizeof(Annotation) * (size_t)g_annotation_count);
+    s->count = g.annotation_count;
+    s->selected = g.selected;
+    memcpy(s->items, g.annotations,
+           sizeof(Annotation) * (size_t)g.annotation_count);
 }
 
 static void restore_snapshot(const Snapshot *s) {
-    g_annotation_count = s->count;
-    g_selected = s->selected;
-    memcpy(g_annotations, s->items,
+    g.annotation_count = s->count;
+    g.selected = s->selected;
+    memcpy(g.annotations, s->items,
            sizeof(Annotation) * (size_t)s->count);
-    g_dirty = TRUE;
+    g.dirty = TRUE;
     update_tool_availability();
     refresh_annotation_tree();
-    InvalidateRect(g_editor, NULL, FALSE);
+    InvalidateRect(g.editor, NULL, FALSE);
 }
 
 static void push_undo(void) {
-    if (g_undo_count == MAX_HISTORY) {
-        memmove(&g_undo[0], &g_undo[1], sizeof(Snapshot) * (MAX_HISTORY - 1));
-        g_undo_count--;
+    if (g.undo_count == MAX_HISTORY) {
+        memmove(&g.undo[0], &g.undo[1], sizeof(Snapshot) * (MAX_HISTORY - 1));
+        g.undo_count--;
     }
-    snapshot_current(&g_undo[g_undo_count++]);
-    g_redo_count = 0;
+    snapshot_current(&g.undo[g.undo_count++]);
+    g.redo_count = 0;
 }
 
 static void undo_action(void) {
-    if (!g_undo_count) return;
-    if (g_redo_count < MAX_HISTORY) snapshot_current(&g_redo[g_redo_count++]);
-    restore_snapshot(&g_undo[--g_undo_count]);
+    if (!g.undo_count) return;
+    if (g.redo_count < MAX_HISTORY) snapshot_current(&g.redo[g.redo_count++]);
+    restore_snapshot(&g.undo[--g.undo_count]);
 }
 
 static void redo_action(void) {
-    if (!g_redo_count) return;
-    if (g_undo_count < MAX_HISTORY) snapshot_current(&g_undo[g_undo_count++]);
-    restore_snapshot(&g_redo[--g_redo_count]);
+    if (!g.redo_count) return;
+    if (g.undo_count < MAX_HISTORY) snapshot_current(&g.undo[g.undo_count++]);
+    restore_snapshot(&g.redo[--g.redo_count]);
 }
 
 static BOOL annotation_name_exists(const wchar_t *name, int except) {
-    return golden_name_exists(g_annotations, g_annotation_count, name, except);
+    return golden_name_exists(g.annotations, g.annotation_count, name, except);
 }
 
 static void make_unique_name(wchar_t *out, size_t cap) {
-    golden_make_unique_name(g_annotations, g_annotation_count, out, cap);
+    golden_make_unique_name(g.annotations, g.annotation_count, out, cap);
 }
 
 static void trim_text(wchar_t *text) {
@@ -271,7 +292,7 @@ static void trim_text(wchar_t *text) {
 
 static BOOL prompt_annotation_name(wchar_t *name, size_t capacity, int except) {
     for (;;) {
-        if (!prompt_text(g_main, except < 0 ? L"New annotation" : L"Rename annotation",
+        if (!prompt_text(g.main, except < 0 ? L"New annotation" : L"Rename annotation",
                          L"Unique annotation name:", name, capacity)) return FALSE;
         trim_text(name);
         if (!name[0]) {
@@ -292,7 +313,7 @@ static BOOL prompt_text(HWND owner, const wchar_t *title, const wchar_t *label,
     if (!registered) {
         WNDCLASSW wc = {0};
         wc.lpfnWndProc = PromptProc;
-        wc.hInstance = g_instance;
+        wc.hInstance = g.instance;
         wc.hCursor = LoadCursorW(NULL, IDC_ARROW);
         wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
         wc.lpszClassName = L"GoldensPrompt";
@@ -310,16 +331,16 @@ static BOOL prompt_text(HWND owner, const wchar_t *title, const wchar_t *label,
     int y = owner_rect.top + ((owner_rect.bottom - owner_rect.top) - (r.bottom - r.top)) / 2;
     state.window = CreateWindowExW(WS_EX_DLGMODALFRAME, L"GoldensPrompt", title,
         WS_POPUP | WS_CAPTION | WS_SYSMENU, x, y, r.right - r.left, r.bottom - r.top,
-        owner, NULL, g_instance, &state);
+        owner, NULL, g.instance, &state);
     CreateWindowW(L"STATIC", label, WS_CHILD | WS_VISIBLE, 16, 14, 390, 20,
-                  state.window, NULL, g_instance, NULL);
+                  state.window, NULL, g.instance, NULL);
     state.edit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", value,
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, 16, 38, 390, 25,
-        state.window, (HMENU)ID_PROMPT_EDIT, g_instance, NULL);
+        state.window, (HMENU)ID_PROMPT_EDIT, g.instance, NULL);
     CreateWindowW(L"BUTTON", L"OK", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
-                  236, 79, 80, 28, state.window, (HMENU)ID_PROMPT_OK, g_instance, NULL);
+                  236, 79, 80, 28, state.window, (HMENU)ID_PROMPT_OK, g.instance, NULL);
     CreateWindowW(L"BUTTON", L"Cancel", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-                  326, 79, 80, 28, state.window, (HMENU)ID_PROMPT_CANCEL, g_instance, NULL);
+                  326, 79, 80, 28, state.window, (HMENU)ID_PROMPT_CANCEL, g.instance, NULL);
     SendMessageW(state.edit, EM_SETSEL, 0, -1);
     EnableWindow(owner, FALSE);
     ShowWindow(state.window, SW_SHOW);
@@ -375,58 +396,61 @@ static LRESULT CALLBACK PromptProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 }
 
 static void clear_image(void) {
-    free(g_pixels);
-    g_pixels = NULL;
-    g_image_w = g_image_h = g_stride = 0;
-    g_resource_visible = FALSE;
-    ++g_image_revision;
+    free(g.pixels);
+    g.pixels = NULL;
+    g.image_w = g.image_h = g.stride = 0;
+    g.resource_visible = FALSE;
+    ++g.image_revision;
 }
 
 static void clear_preview(void) {
-    InterlockedIncrement(&g_preview_generation);
-    golden_preview_service_clear(&g_preview_service);
-    g_preview_image = (GoldenImage){0};
-    g_preview_target = NULL;
-    g_preview_title[0] = 0;
-    g_preview_mode = FALSE;
-    g_preview_loading = FALSE;
-    ++g_image_revision;
+    InterlockedIncrement(&g.preview_generation);
+    golden_preview_service_clear(&g.preview_service);
+    g.preview_image = (GoldenImage){0};
+    g.preview_target = NULL;
+    g.preview_title[0] = 0;
+    g.preview_mode = FALSE;
+    g.preview_loading = FALSE;
+    ++g.image_revision;
     update_context_label();
     update_tool_availability();
 }
 
 static BYTE *active_pixels(void) {
-    return g_preview_mode ? g_preview_image.pixels : g_resource_visible ? g_pixels : NULL;
+    return g.preview_mode ? g.preview_image.pixels : g.resource_visible ? g.pixels : NULL;
 }
 static UINT active_width(void) {
-    return g_preview_mode ? g_preview_image.width : g_resource_visible ? g_image_w : 0;
+    return g.preview_mode ? g.preview_image.width : g.resource_visible ? g.image_w : 0;
 }
 static UINT active_height(void) {
-    return g_preview_mode ? g_preview_image.height : g_resource_visible ? g_image_h : 0;
+    return g.preview_mode ? g.preview_image.height : g.resource_visible ? g.image_h : 0;
 }
 
 static BOOL load_png(const wchar_t *path) {
     GoldenImage image = {0};
-    if (!golden_png_load(g_wic, path, &image)) return FALSE;
+    if (!golden_png_load(g.wic, path, &image)) return FALSE;
     clear_image();
-    g_pixels = image.pixels;
-    g_image_w = image.width;
-    g_image_h = image.height;
-    g_stride = image.stride;
+    g.pixels = image.pixels;
+    g.image_w = image.width;
+    g.image_h = image.height;
+    g.stride = image.stride;
     return TRUE;
 }
 
 static BOOL save_png_pixels(const wchar_t *path, BYTE *pixels, UINT width, UINT height, UINT stride) {
-    return golden_png_save(g_wic, path, pixels, width, height, stride);
+    return golden_png_save(g.wic, path, pixels, width, height, stride);
 }
 
 static void load_annotations(const wchar_t *png_path) {
-    g_annotation_count = 0;
-    g_selected = -1;
-    g_dirty = FALSE;
-    g_undo_count = g_redo_count = 0;
+    g.annotation_count = 0;
+    g.selected = -1;
+    g.dirty = FALSE;
+    g.undo_count = g.redo_count = 0;
     wchar_t path[MAX_PATH * 4];
-    json_path_for(png_path, path, _countof(path));
+    if (!json_path_for(png_path, path, _countof(path))) {
+        show_error(L"The resource path is too long to locate its annotation JSON file.");
+        return;
+    }
     FILE *file = _wfopen(path, L"rb");
     if (!file) return;
     if (fseek(file, 0, SEEK_END) != 0) { fclose(file); return; }
@@ -440,29 +464,32 @@ static void load_annotations(const wchar_t *png_path) {
     fclose(file);
     text[got] = 0;
     int count = MAX_ANNOTATIONS;
-    if (golden_document_parse_utf8(text, got, g_annotations, &count)) g_annotation_count = count;
+    if (golden_document_parse_utf8(text, got, g.annotations, &count)) g.annotation_count = count;
     else show_error(L"The annotation JSON is invalid and was not loaded.");
     free(text);
 }
 
 static BOOL save_annotations(void) {
-    if (!g_image_path[0]) return FALSE;
+    if (!g.image_path[0]) return FALSE;
     wchar_t path[MAX_PATH * 4];
-    json_path_for(g_image_path, path, _countof(path));
+    if (!json_path_for(g.image_path, path, _countof(path))) {
+        show_error(L"The resource path is too long to save its annotation JSON file.");
+        return FALSE;
+    }
     size_t json_length = 0;
-    char *json = golden_document_serialize_utf8(g_annotations, g_annotation_count, &json_length);
+    char *json = golden_document_serialize_utf8(g.annotations, g.annotation_count, &json_length);
     if (!json) { show_error(L"Could not serialize the annotations."); return FALSE; }
     BOOL ok = golden_atomic_write_bytes(path, json, json_length);
     free(json);
-    if (ok) g_dirty = FALSE;
+    if (ok) g.dirty = FALSE;
     else show_error(L"Could not finish writing the annotation JSON file.");
-    InvalidateRect(g_editor, NULL, FALSE);
+    InvalidateRect(g.editor, NULL, FALSE);
     return ok;
 }
 
 static BOOL maybe_save(void) {
-    if (!g_dirty) return TRUE;
-    int answer = MessageBoxW(g_main, L"Save annotation changes?", APP_NAME,
+    if (!g.dirty) return TRUE;
+    int answer = MessageBoxW(g.main, L"Save annotation changes?", APP_NAME,
                              MB_YESNOCANCEL | MB_ICONQUESTION);
     if (answer == IDCANCEL) return FALSE;
     if (answer == IDYES) return save_annotations();
@@ -509,26 +536,26 @@ static ResourceTreeNode *tree_node_data(HTREEITEM item) {
     TVITEMW info = {0};
     info.mask = TVIF_PARAM;
     info.hItem = item;
-    return TreeView_GetItem(g_tree, &info) ? (ResourceTreeNode *)info.lParam : NULL;
+    return TreeView_GetItem(g.tree, &info) ? (ResourceTreeNode *)info.lParam : NULL;
 }
 
 static HTREEITEM find_resource_item(HTREEITEM item, const wchar_t *path) {
     while (item) {
         ResourceTreeNode *node = tree_node_data(item);
         if (node && node->path && !_wcsicmp(node->path, path)) return item;
-        HTREEITEM found = find_resource_item(TreeView_GetChild(g_tree, item), path);
+        HTREEITEM found = find_resource_item(TreeView_GetChild(g.tree, item), path);
         if (found) return found;
-        item = TreeView_GetNextSibling(g_tree, item);
+        item = TreeView_GetNextSibling(g.tree, item);
     }
     return NULL;
 }
 
 static HTREEITEM find_annotation_item(int annotation_index) {
-    if (!g_tree || !g_image_path[0]) return NULL;
-    HTREEITEM resource = find_resource_item(TreeView_GetRoot(g_tree), g_image_path);
+    if (!g.tree || !g.image_path[0]) return NULL;
+    HTREEITEM resource = find_resource_item(TreeView_GetRoot(g.tree), g.image_path);
     if (!resource) return NULL;
-    for (HTREEITEM item = TreeView_GetChild(g_tree, resource); item;
-         item = TreeView_GetNextSibling(g_tree, item)) {
+    for (HTREEITEM item = TreeView_GetChild(g.tree, resource); item;
+         item = TreeView_GetNextSibling(g.tree, item)) {
         ResourceTreeNode *node = tree_node_data(item);
         if (node && node->kind == RESOURCE_ANNOTATION &&
             node->annotation_index == annotation_index) return item;
@@ -537,40 +564,40 @@ static HTREEITEM find_annotation_item(int annotation_index) {
 }
 
 static void sync_tree_annotation_selection(void) {
-    if (!g_tree || !g_image_path[0]) return;
-    HTREEITEM target = g_selected >= 0 ? find_annotation_item(g_selected) :
-        find_resource_item(TreeView_GetRoot(g_tree), g_image_path);
+    if (!g.tree || !g.image_path[0]) return;
+    HTREEITEM target = g.selected >= 0 ? find_annotation_item(g.selected) :
+        find_resource_item(TreeView_GetRoot(g.tree), g.image_path);
     if (!target) return;
-    BOOL was_rebuilding = g_rebuilding_resources;
-    g_rebuilding_resources = TRUE;
-    TreeView_EnsureVisible(g_tree, target);
-    TreeView_SelectItem(g_tree, target);
-    g_rebuilding_resources = was_rebuilding;
+    BOOL was_rebuilding = g.rebuilding_resources;
+    g.rebuilding_resources = TRUE;
+    TreeView_EnsureVisible(g.tree, target);
+    TreeView_SelectItem(g.tree, target);
+    g.rebuilding_resources = was_rebuilding;
 }
 
 static void delete_annotation_nodes(HTREEITEM item) {
     while (item) {
-        HTREEITEM next = TreeView_GetNextSibling(g_tree, item);
+        HTREEITEM next = TreeView_GetNextSibling(g.tree, item);
         ResourceTreeNode *node = tree_node_data(item);
         if (node && node->kind == RESOURCE_ANNOTATION) {
             free(node->path);
             free(node);
-            TreeView_DeleteItem(g_tree, item);
+            TreeView_DeleteItem(g.tree, item);
         } else {
-            delete_annotation_nodes(TreeView_GetChild(g_tree, item));
+            delete_annotation_nodes(TreeView_GetChild(g.tree, item));
         }
         item = next;
     }
 }
 
 static void refresh_annotation_tree(void) {
-    if (!g_tree) return;
-    g_rebuilding_resources = TRUE;
-    delete_annotation_nodes(TreeView_GetRoot(g_tree));
-    if (g_image_path[0]) {
-        HTREEITEM resource = find_resource_item(TreeView_GetRoot(g_tree), g_image_path);
+    if (!g.tree) return;
+    g.rebuilding_resources = TRUE;
+    delete_annotation_nodes(TreeView_GetRoot(g.tree));
+    if (g.image_path[0]) {
+        HTREEITEM resource = find_resource_item(TreeView_GetRoot(g.tree), g.image_path);
         HTREEITEM selected_annotation = NULL;
-        for (int i = 0; resource && i < g_annotation_count; ++i) {
+        for (int i = 0; resource && i < g.annotation_count; ++i) {
             ResourceTreeNode *node = (ResourceTreeNode *)calloc(1, sizeof(*node));
             if (!node) break;
             node->kind = RESOURCE_ANNOTATION;
@@ -579,16 +606,16 @@ static void refresh_annotation_tree(void) {
             insert.hParent = resource;
             insert.hInsertAfter = TVI_LAST;
             insert.item.mask = TVIF_TEXT | TVIF_PARAM;
-            insert.item.pszText = g_annotations[i].name;
+            insert.item.pszText = g.annotations[i].name;
             insert.item.lParam = (LPARAM)node;
-            HTREEITEM child = TreeView_InsertItem(g_tree, &insert);
+            HTREEITEM child = TreeView_InsertItem(g.tree, &insert);
             if (!child) free(node);
-            else if (i == g_selected) selected_annotation = child;
+            else if (i == g.selected) selected_annotation = child;
         }
-        if (resource) TreeView_Expand(g_tree, resource, TVE_EXPAND);
-        if (selected_annotation) TreeView_SelectItem(g_tree, selected_annotation);
+        if (resource) TreeView_Expand(g.tree, resource, TVE_EXPAND);
+        if (selected_annotation) TreeView_SelectItem(g.tree, selected_annotation);
     }
-    g_rebuilding_resources = FALSE;
+    g.rebuilding_resources = FALSE;
 }
 
 typedef struct {
@@ -606,7 +633,7 @@ static int compare_resources(const void *left, const void *right) {
 
 static void populate_directory(HTREEITEM parent, const wchar_t *directory) {
     wchar_t pattern[MAX_PATH * 4];
-    _snwprintf(pattern, _countof(pattern), L"%s\\*", directory);
+    if (!golden_path_join(directory, L"*", pattern, _countof(pattern))) return;
     WIN32_FIND_DATAW data;
     HANDLE find = FindFirstFileW(pattern, &data);
     if (find == INVALID_HANDLE_VALUE) return;
@@ -619,9 +646,12 @@ static void populate_directory(HTREEITEM parent, const wchar_t *directory) {
             FILE_ATTRIBUTE_SYSTEM | FILE_ATTRIBUTE_REPARSE_POINT))) continue;
         if (!directory_entry && !ends_with_png(data.cFileName)) continue;
         wchar_t full[MAX_PATH * 4];
-        _snwprintf(full, _countof(full), L"%s\\%s", directory, data.cFileName);
+        if (!golden_path_join(directory, data.cFileName,
+                              full, _countof(full))) continue;
         if (count == capacity) {
+            if (capacity > SIZE_MAX / 2) break;
             size_t next = capacity ? capacity * 2 : 16;
+            if (next > SIZE_MAX / sizeof(*entries)) break;
             ResourceEntry *grown = (ResourceEntry *)realloc(entries, next * sizeof(*entries));
             if (!grown) break;
             entries = grown;
@@ -636,9 +666,9 @@ static void populate_directory(HTREEITEM parent, const wchar_t *directory) {
     FindClose(find);
     qsort(entries, count, sizeof(*entries), compare_resources);
     for (size_t i = 0; i < count; ++i) {
-        HTREEITEM node = insert_path_item(g_tree, parent, entries[i].name,
+        HTREEITEM node = insert_path_item(g.tree, parent, entries[i].name,
                                           entries[i].path, entries[i].directory);
-        if (entries[i].directory) populate_directory(node, entries[i].path);
+        if (node && entries[i].directory) populate_directory(node, entries[i].path);
         free(entries[i].name);
         free(entries[i].path);
     }
@@ -646,17 +676,17 @@ static void populate_directory(HTREEITEM parent, const wchar_t *directory) {
 }
 
 static void refresh_resources(void) {
-    g_rebuilding_resources = TRUE;
-    free_tree_item(g_tree, TreeView_GetRoot(g_tree));
-    TreeView_DeleteAllItems(g_tree);
-    if (g_root[0]) {
-        const wchar_t *label = PathFindFileNameW(g_root);
-        if (!*label) label = g_root;
-        HTREEITEM root = insert_path_item(g_tree, TVI_ROOT, label, g_root, TRUE);
-        populate_directory(root, g_root);
-        TreeView_Expand(g_tree, root, TVE_EXPAND);
+    g.rebuilding_resources = TRUE;
+    free_tree_item(g.tree, TreeView_GetRoot(g.tree));
+    TreeView_DeleteAllItems(g.tree);
+    if (g.root[0]) {
+        const wchar_t *label = PathFindFileNameW(g.root);
+        if (!*label) label = g.root;
+        HTREEITEM root = insert_path_item(g.tree, TVI_ROOT, label, g.root, TRUE);
+        populate_directory(root, g.root);
+        TreeView_Expand(g.tree, root, TVE_EXPAND);
     }
-    g_rebuilding_resources = FALSE;
+    g.rebuilding_resources = FALSE;
     refresh_annotation_tree();
     update_capture_availability();
 }
@@ -665,18 +695,20 @@ static void remember_root(void) {
     HKEY key;
     if (RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\Goldens", 0, NULL, 0,
                         KEY_SET_VALUE, NULL, &key, NULL) == ERROR_SUCCESS) {
-        RegSetValueExW(key, L"LastFolder", 0, REG_SZ, (BYTE *)g_root,
-                       (DWORD)((wcslen(g_root) + 1) * sizeof(wchar_t)));
+        RegSetValueExW(key, L"LastFolder", 0, REG_SZ, (BYTE *)g.root,
+                       (DWORD)((wcslen(g.root) + 1) * sizeof(wchar_t)));
         RegCloseKey(key);
     }
 }
 
 static void load_remembered_root(void) {
     HKEY key;
-    DWORD type, bytes = sizeof(g_root);
+    DWORD type, bytes = sizeof(g.root);
     if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Goldens", 0, KEY_QUERY_VALUE, &key) == ERROR_SUCCESS) {
-        if (RegQueryValueExW(key, L"LastFolder", NULL, &type, (BYTE *)g_root, &bytes) != ERROR_SUCCESS ||
-            type != REG_SZ || GetFileAttributesW(g_root) == INVALID_FILE_ATTRIBUTES) g_root[0] = 0;
+        if (RegQueryValueExW(key, L"LastFolder", NULL, &type, (BYTE *)g.root, &bytes) != ERROR_SUCCESS ||
+            type != REG_SZ || bytes < sizeof(wchar_t) || bytes > sizeof(g.root) ||
+            bytes % sizeof(wchar_t) || g.root[bytes / sizeof(wchar_t) - 1] != 0 ||
+            GetFileAttributesW(g.root) == INVALID_FILE_ATTRIBUTES) g.root[0] = 0;
         RegCloseKey(key);
     }
 }
@@ -686,32 +718,37 @@ static void initialize_startup_root(void) {
     LPWSTR *argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     if (argv && argc > 1) {
         DWORD attrs = GetFileAttributesW(argv[1]);
-        if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY))
-            GetFullPathNameW(argv[1], _countof(g_root), g_root, NULL);
+        if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY)) {
+            DWORD length = GetFullPathNameW(argv[1], _countof(g.root), g.root, NULL);
+            if (!length || length >= _countof(g.root)) g.root[0] = 0;
+        }
     }
     if (argv) LocalFree(argv);
-    if (!g_root[0]) GetCurrentDirectoryW(_countof(g_root), g_root);
-    DWORD attrs = GetFileAttributesW(g_root);
+    if (!g.root[0]) {
+        DWORD length = GetCurrentDirectoryW(_countof(g.root), g.root);
+        if (!length || length >= _countof(g.root)) g.root[0] = 0;
+    }
+    DWORD attrs = GetFileAttributesW(g.root);
     if (attrs == INVALID_FILE_ATTRIBUTES || !(attrs & FILE_ATTRIBUTE_DIRECTORY)) {
-        g_root[0] = 0;
+        g.root[0] = 0;
         load_remembered_root();
     }
-    if (g_root[0]) {
-        wcsncpy(g_current_dir, g_root, _countof(g_current_dir) - 1);
-        g_current_dir[_countof(g_current_dir) - 1] = 0;
+    if (g.root[0]) {
+        if (!golden_path_copy(g.root, g.current_dir,
+                              _countof(g.current_dir))) g.root[0] = 0;
     }
 }
 
 static int CALLBACK browse_callback(HWND hwnd, UINT msg, LPARAM lp, LPARAM data) {
-    if (msg == BFFM_INITIALIZED && g_root[0])
-        SendMessageW(hwnd, BFFM_SETSELECTIONW, TRUE, (LPARAM)g_root);
+    if (msg == BFFM_INITIALIZED && g.root[0])
+        SendMessageW(hwnd, BFFM_SETSELECTIONW, TRUE, (LPARAM)g.root);
     return 0;
 }
 
 static void open_folder(void) {
     if (!maybe_save()) return;
     BROWSEINFOW bi = {0};
-    bi.hwndOwner = g_main;
+    bi.hwndOwner = g.main;
     bi.lpszTitle = L"Choose a golden resources folder";
     bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
     bi.lpfn = browse_callback;
@@ -719,48 +756,57 @@ static void open_folder(void) {
     if (!id) return;
     wchar_t path[MAX_PATH * 4];
     if (SHGetPathFromIDListW(id, path)) {
-        wcsncpy(g_root, path, _countof(g_root) - 1);
-        g_root[_countof(g_root) - 1] = 0;
-        wcsncpy(g_current_dir, g_root, _countof(g_current_dir) - 1);
-        g_current_dir[_countof(g_current_dir) - 1] = 0;
+        if (!golden_path_copy(path, g.root, _countof(g.root)) ||
+            !golden_path_copy(path, g.current_dir,
+                              _countof(g.current_dir))) {
+            show_error(L"The selected folder path is too long.");
+            CoTaskMemFree(id);
+            return;
+        }
         clear_image();
         clear_preview();
-        g_image_path[0] = 0;
-        g_annotation_count = 0;
-        g_selected = -1;
+        g.image_path[0] = 0;
+        g.annotation_count = 0;
+        g.selected = -1;
         update_tool_availability();
-        g_dirty = FALSE;
-        g_undo_count = g_redo_count = 0;
+        g.dirty = FALSE;
+        g.undo_count = g.redo_count = 0;
         remember_root();
         refresh_resources();
         update_status();
-        SetWindowTextW(g_main, APP_NAME);
+        SetWindowTextW(g.main, APP_NAME);
         update_context_label();
-        InvalidateRect(g_editor, NULL, FALSE);
+        InvalidateRect(g.editor, NULL, FALSE);
     }
     CoTaskMemFree(id);
 }
 
 static BOOL load_resource(const wchar_t *path) {
+    wchar_t next_path[MAX_PATH * 4], next_directory[MAX_PATH * 4];
+    if (!golden_path_copy(path, next_path, _countof(next_path)) ||
+        !parent_dir_for(path, next_directory, _countof(next_directory))) {
+        show_error(L"The selected resource path is too long.");
+        return FALSE;
+    }
     if (!maybe_save()) return FALSE;
-    if (!load_png(path)) { show_error(L"Could not decode the selected PNG file."); return FALSE; }
+    if (!load_png(next_path)) { show_error(L"Could not decode the selected PNG file."); return FALSE; }
     clear_preview();
-    g_resource_visible = TRUE;
-    g_zoom = 0.0;
-    g_pan_x = g_pan_y = 0;
-    wcsncpy(g_image_path, path, _countof(g_image_path) - 1);
-    g_image_path[_countof(g_image_path) - 1] = 0;
-    parent_dir_for(path, g_current_dir, _countof(g_current_dir));
+    g.resource_visible = TRUE;
+    g.zoom = 0.0;
+    g.pan_x = g.pan_y = 0;
+    golden_path_copy(next_path, g.image_path, _countof(g.image_path));
+    golden_path_copy(next_directory, g.current_dir, _countof(g.current_dir));
     update_status();
-    load_annotations(path);
+    load_annotations(next_path);
     update_tool_availability();
     refresh_annotation_tree();
     update_capture_availability();
     update_context_label();
-    InvalidateRect(g_editor, NULL, FALSE);
+    InvalidateRect(g.editor, NULL, FALSE);
     wchar_t title[MAX_PATH * 4 + 32];
-    _snwprintf(title, _countof(title), L"Goldens — %s", PathFindFileNameW(path));
-    SetWindowTextW(g_main, title);
+    _snwprintf(title, _countof(title), L"Goldens — %s",
+               PathFindFileNameW(next_path));
+    SetWindowTextW(g.main, title);
     return TRUE;
 }
 
@@ -768,12 +814,12 @@ static void image_layout(HWND hwnd, RECT *dest, double *scale) {
     RECT client;
     GetClientRect(hwnd, &client);
     UINT width = active_width(), height = active_height();
-    if ((!g_preview_mode && !active_pixels()) || !width || !height) {
+    if ((!g.preview_mode && !active_pixels()) || !width || !height) {
         SetRectEmpty(dest); *scale = 1.0; return;
     }
     GoldenViewport viewport = golden_compute_viewport(
         (int)width, (int)height, client.right, client.bottom,
-        30, g_zoom, g_pan_x, g_pan_y);
+        30, g.zoom, g.pan_x, g.pan_y);
     *dest = viewport.destination;
     *scale = viewport.scale;
 }
@@ -807,55 +853,55 @@ static RECT annotation_screen_rect(HWND hwnd, const RECT *boundary) {
 
 static void hide_annotation_tooltip(HWND hwnd) {
     KillTimer(hwnd, EDITOR_TOOLTIP_TIMER);
-    g_tooltip_pending = -1;
-    if (g_tooltip_visible >= 0)
-        golden_tooltip_hide(g_editor_tooltip, &g_editor_tooltip_tool);
-    g_tooltip_visible = -1;
+    g.tooltip_pending = -1;
+    if (g.tooltip_visible >= 0)
+        golden_tooltip_hide(g.editor_tooltip, &g.editor_tooltip_tool);
+    g.tooltip_visible = -1;
 }
 
 static void update_annotation_hover(HWND hwnd, POINT client) {
-    if (!g_editor_mouse_tracking) {
+    if (!g.editor_mouse_tracking) {
         TRACKMOUSEEVENT tracking = {sizeof(tracking), TME_LEAVE, hwnd, 0};
-        g_editor_mouse_tracking = TrackMouseEvent(&tracking);
+        g.editor_mouse_tracking = TrackMouseEvent(&tracking);
     }
     POINT image;
     int hit = -1;
-    if (!g_preview_mode && !g_panning && !g_drag_mode && !g_drawing &&
+    if (!g.preview_mode && !g.panning && !g.drag_mode && !g.drawing &&
         client_to_image(hwnd, client, &image))
-        hit = golden_hit_annotation(g_annotations, g_annotation_count, image);
+        hit = golden_hit_annotation(g.annotations, g.annotation_count, image);
     GoldenTooltipHoverAction action = golden_tooltip_hover_action(
-        hit, g_tooltip_pending, g_tooltip_visible);
+        hit, g.tooltip_pending, g.tooltip_visible);
     if (action == GOLDEN_TOOLTIP_HOVER_NONE) return;
     hide_annotation_tooltip(hwnd);
     if (action == GOLDEN_TOOLTIP_HOVER_SCHEDULE) {
-        g_tooltip_pending = hit;
+        g.tooltip_pending = hit;
         SetTimer(hwnd, EDITOR_TOOLTIP_TIMER, EDITOR_TOOLTIP_DELAY_MS, NULL);
     }
 }
 
 static void show_pending_annotation_tooltip(HWND hwnd) {
     KillTimer(hwnd, EDITOR_TOOLTIP_TIMER);
-    if (!g_editor_tooltip || g_tooltip_pending < 0 ||
-        g_tooltip_pending >= g_annotation_count) return;
+    if (!g.editor_tooltip || g.tooltip_pending < 0 ||
+        g.tooltip_pending >= g.annotation_count) return;
     POINT cursor;
     GetCursorPos(&cursor);
     POINT client = cursor;
     ScreenToClient(hwnd, &client);
     POINT image;
     int hit = client_to_image(hwnd, client, &image) ?
-        golden_hit_annotation(g_annotations, g_annotation_count, image) : -1;
-    if (hit != g_tooltip_pending || g_preview_mode || g_panning ||
-        g_drag_mode || g_drawing) {
-        g_tooltip_pending = -1;
+        golden_hit_annotation(g.annotations, g.annotation_count, image) : -1;
+    if (hit != g.tooltip_pending || g.preview_mode || g.panning ||
+        g.drag_mode || g.drawing) {
+        g.tooltip_pending = -1;
         return;
     }
-    wcsncpy(g_tooltip_text, g_annotations[hit].name, _countof(g_tooltip_text) - 1);
-    g_tooltip_text[_countof(g_tooltip_text) - 1] = 0;
+    wcsncpy(g.tooltip_text, g.annotations[hit].name, _countof(g.tooltip_text) - 1);
+    g.tooltip_text[_countof(g.tooltip_text) - 1] = 0;
     POINT position = {cursor.x + 12, cursor.y + 20};
-    golden_tooltip_show(g_editor_tooltip, &g_editor_tooltip_tool,
-                        g_tooltip_text, position);
-    g_tooltip_visible = hit;
-    g_tooltip_pending = -1;
+    golden_tooltip_show(g.editor_tooltip, &g.editor_tooltip_tool,
+                        g.tooltip_text, position);
+    g.tooltip_visible = hit;
+    g.tooltip_pending = -1;
 }
 
 static void draw_editor(HWND hwnd, HDC dc) {
@@ -868,53 +914,53 @@ static void draw_editor(HWND hwnd, HDC dc) {
     UINT image_w = active_width(), image_h = active_height();
     if (!pixels) {
         const wchar_t *message;
-        if (g_preview_mode)
-            message = g_preview_loading ? L"Capturing window preview…" : L"Preview unavailable for this window";
+        if (g.preview_mode)
+            message = g.preview_loading ? L"Capturing window preview…" : L"Preview unavailable for this window";
         else
-            message = g_root[0] ? L"Select a PNG from the resource tree" : L"Open a resource folder to begin";
+            message = g.root[0] ? L"Select a PNG from the resource tree" : L"Open a resource folder to begin";
         DrawTextW(dc, message, -1, &client, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         return;
     }
     RECT dest;
     double scale;
     image_layout(hwnd, &dest, &scale);
-    if (!golden_draw_cached_bgra_image(&g_image_cache, dc, pixels,
+    if (!golden_draw_cached_bgra_image(&g.image_cache, dc, pixels,
                                        image_w, image_h, &dest, scale,
-                                       g_image_revision))
+                                       g.image_revision))
         golden_draw_bgra_image(dc, pixels, image_w, image_h, &dest, scale);
     FrameRect(dc, &dest, (HBRUSH)GetStockObject(BLACK_BRUSH));
-    for (int i = 0; !g_preview_mode && i < g_annotation_count; ++i) {
+    for (int i = 0; !g.preview_mode && i < g.annotation_count; ++i) {
         RECT r = annotation_screen_rect_for_layout(
-            &dest, scale, &g_annotations[i].boundary);
+            &dest, scale, &g.annotations[i].boundary);
         golden_draw_boundary(dc, &r,
-            i == g_selected ? RGB(255, 180, 0) : RGB(0, 220, 255),
-            i == g_selected ? 3 : 2, PS_SOLID);
-        if (i == g_selected) {
+            i == g.selected ? RGB(255, 180, 0) : RGB(0, 220, 255),
+            i == g.selected ? 3 : 2, PS_SOLID);
+        if (i == g.selected) {
             RECT handle = {r.right - 5, r.bottom - 5, r.right + 5, r.bottom + 5};
             FillRect(dc, &handle, (HBRUSH)GetStockObject(WHITE_BRUSH));
         }
-        if (g_annotations[i].has_click) {
-            int cx = r.left + (int)((r.right - r.left) * g_annotations[i].click_x);
-            int cy = r.top + (int)((r.bottom - r.top) * g_annotations[i].click_y);
+        if (g.annotations[i].has_click) {
+            int cx = r.left + (int)((r.right - r.left) * g.annotations[i].click_x);
+            int cy = r.top + (int)((r.bottom - r.top) * g.annotations[i].click_y);
             MoveToEx(dc, cx - 6, cy, NULL); LineTo(dc, cx + 7, cy);
             MoveToEx(dc, cx, cy - 6, NULL); LineTo(dc, cx, cy + 7);
         }
     }
-    if (!g_preview_mode && g_drawing) {
-        RECT boundary = {min(g_draw_start.x, g_draw_current.x), min(g_draw_start.y, g_draw_current.y),
-                         max(g_draw_start.x, g_draw_current.x), max(g_draw_start.y, g_draw_current.y)};
+    if (!g.preview_mode && g.drawing) {
+        RECT boundary = {min(g.draw_start.x, g.draw_current.x), min(g.draw_start.y, g.draw_current.y),
+                         max(g.draw_start.x, g.draw_current.x), max(g.draw_start.y, g.draw_current.y)};
         RECT r = annotation_screen_rect_for_layout(&dest, scale, &boundary);
         golden_fill_tinted_rect(dc, &r, RGB(255, 150, 0), 112);
         golden_draw_boundary(dc, &r, RGB(255, 210, 0), 3, PS_SOLID);
     }
     wchar_t info_text[512];
-    if (g_preview_mode)
+    if (g.preview_mode)
         _snwprintf(info_text, _countof(info_text), L"Window preview: %s  •  %u × %u px  •  %.0f%%",
-                   g_preview_title, image_w, image_h, scale * 100.0);
+                   g.preview_title, image_w, image_h, scale * 100.0);
     else
         _snwprintf(info_text, _countof(info_text), L"%u × %u px  •  %d annotation%s%s  •  %.0f%%",
-            image_w, image_h, g_annotation_count, g_annotation_count == 1 ? L"" : L"s",
-            g_dirty ? L"  •  Unsaved" : L"", scale * 100.0);
+            image_w, image_h, g.annotation_count, g.annotation_count == 1 ? L"" : L"s",
+            g.dirty ? L"  •  Unsaved" : L"", scale * 100.0);
     SetTextColor(dc, RGB(230, 230, 230));
     TextOutW(dc, 10, 7, info_text, (int)wcslen(info_text));
 }
@@ -926,61 +972,61 @@ static void paint_editor(HWND hwnd) {
     GetClientRect(hwnd, &client);
     int width = max(1, client.right - client.left);
     int height = max(1, client.bottom - client.top);
-    BOOL buffered = golden_back_buffer_ensure(&g_editor_buffer, paint_dc,
+    BOOL buffered = golden_back_buffer_ensure(&g.editor_buffer, paint_dc,
                                               width, height);
-    HDC target = buffered ? g_editor_buffer.dc : paint_dc;
+    HDC target = buffered ? g.editor_buffer.dc : paint_dc;
     draw_editor(hwnd, target);
     if (buffered)
-        BitBlt(paint_dc, 0, 0, width, height, g_editor_buffer.dc, 0, 0, SRCCOPY);
+        BitBlt(paint_dc, 0, 0, width, height, g.editor_buffer.dc, 0, 0, SRCCOPY);
     EndPaint(hwnd, &ps);
 }
 
 static void rename_selected(void) {
-    if (g_selected < 0) return;
+    if (g.selected < 0) return;
     wchar_t name[128];
-    wcscpy(name, g_annotations[g_selected].name);
-    if (!prompt_annotation_name(name, _countof(name), g_selected)) return;
+    wcscpy(name, g.annotations[g.selected].name);
+    if (!prompt_annotation_name(name, _countof(name), g.selected)) return;
     push_undo();
-    wcscpy(g_annotations[g_selected].name, name);
-    g_dirty = TRUE;
+    wcscpy(g.annotations[g.selected].name, name);
+    g.dirty = TRUE;
     refresh_annotation_tree();
-    InvalidateRect(g_editor, NULL, FALSE);
+    InvalidateRect(g.editor, NULL, FALSE);
 }
 
 static void delete_selected(void) {
-    if (g_selected < 0) return;
+    if (g.selected < 0) return;
     push_undo();
-    memmove(&g_annotations[g_selected], &g_annotations[g_selected + 1],
+    memmove(&g.annotations[g.selected], &g.annotations[g.selected + 1],
             sizeof(Annotation) *
-                (size_t)(g_annotation_count - g_selected - 1));
-    g_annotation_count--;
-    if (g_selected >= g_annotation_count) g_selected = g_annotation_count - 1;
-    g_dirty = TRUE;
+                (size_t)(g.annotation_count - g.selected - 1));
+    g.annotation_count--;
+    if (g.selected >= g.annotation_count) g.selected = g.annotation_count - 1;
+    g.dirty = TRUE;
     update_tool_availability();
     refresh_annotation_tree();
-    InvalidateRect(g_editor, NULL, FALSE);
+    InvalidateRect(g.editor, NULL, FALSE);
 }
 
 static void clear_click(void) {
-    if (g_selected < 0 || !g_annotations[g_selected].has_click) return;
+    if (g.selected < 0 || !g.annotations[g.selected].has_click) return;
     push_undo();
-    g_annotations[g_selected].has_click = FALSE;
-    g_dirty = TRUE;
-    InvalidateRect(g_editor, NULL, FALSE);
+    g.annotations[g.selected].has_click = FALSE;
+    g.dirty = TRUE;
+    InvalidateRect(g.editor, NULL, FALSE);
 }
 
 static void deselect_annotation(void) {
-    if (g_selected < 0) return;
-    g_selected = -1;
+    if (g.selected < 0) return;
+    g.selected = -1;
     update_tool_availability();
     sync_tree_annotation_selection();
-    InvalidateRect(g_editor, NULL, FALSE);
+    InvalidateRect(g.editor, NULL, FALSE);
 }
 
 static void set_editor_cursor(void) {
-    LPCWSTR cursor = g_drag_mode == 2 ? IDC_SIZENWSE :
-                     g_panning || g_drag_mode == 1 ? IDC_SIZEALL :
-                     g_preview_mode || g_tool == TOOL_SELECT ? IDC_ARROW :
+    LPCWSTR cursor = g.drag_mode == 2 ? IDC_SIZENWSE :
+                     g.panning || g.drag_mode == 1 ? IDC_SIZEALL :
+                     g.preview_mode || g.tool == TOOL_SELECT ? IDC_ARROW :
                      IDC_CROSS;
     SetCursor(LoadCursorW(NULL, cursor));
 }
@@ -998,59 +1044,59 @@ static LRESULT CALLBACK EditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_LBUTTONDOWN: {
         hide_annotation_tooltip(hwnd);
         SetFocus(hwnd);
-        if (g_preview_mode) {
-            g_panning = TRUE;
-            g_pan_start = (POINT){GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
-            g_pan_origin_x = g_pan_x; g_pan_origin_y = g_pan_y;
+        if (g.preview_mode) {
+            g.panning = TRUE;
+            g.pan_start = (POINT){GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
+            g.pan_origin_x = g.pan_x; g.pan_origin_y = g.pan_y;
             SetCapture(hwnd);
             set_editor_cursor();
             return 0;
         }
         POINT client = {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)}, image;
         if (!client_to_image(hwnd, client, &image)) {
-            if (g_tool == TOOL_SELECT) deselect_annotation();
+            if (g.tool == TOOL_SELECT) deselect_annotation();
             return 0;
         }
-        if (g_tool == TOOL_CLICK) {
-            if (g_selected >= 0 && g_selected < g_annotation_count &&
-                PtInRect(&g_annotations[g_selected].boundary, image)) {
+        if (g.tool == TOOL_CLICK) {
+            if (g.selected >= 0 && g.selected < g.annotation_count &&
+                PtInRect(&g.annotations[g.selected].boundary, image)) {
                 push_undo();
-                golden_set_click(&g_annotations[g_selected], image);
-                g_dirty = TRUE;
+                golden_set_click(&g.annotations[g.selected], image);
+                g.dirty = TRUE;
             } else MessageBeep(MB_ICONWARNING);
             InvalidateRect(hwnd, NULL, FALSE);
             return 0;
         }
-        if (g_tool == TOOL_RECTANGLE) {
-            if (g_annotation_count >= MAX_ANNOTATIONS) {
+        if (g.tool == TOOL_RECTANGLE) {
+            if (g.annotation_count >= MAX_ANNOTATIONS) {
                 show_error(L"The annotation limit has been reached.");
                 return 0;
             }
-            g_selected = -1;
+            g.selected = -1;
             update_tool_availability();
             sync_tree_annotation_selection();
-            g_drawing = TRUE;
-            g_draw_start = g_draw_current = image;
+            g.drawing = TRUE;
+            g.draw_start = g.draw_current = image;
             SetCapture(hwnd);
         } else {
-            int hit = golden_hit_annotation(g_annotations, g_annotation_count, image);
+            int hit = golden_hit_annotation(g.annotations, g.annotation_count, image);
             if (hit >= 0) {
-                g_selected = hit;
+                g.selected = hit;
                 update_tool_availability();
                 sync_tree_annotation_selection();
-                RECT screen = annotation_screen_rect(hwnd, &g_annotations[hit].boundary);
-                g_drag_mode = abs(client.x - screen.right) <= 9 && abs(client.y - screen.bottom) <= 9 ? 2 : 1;
-                g_drag_start = image;
-                g_drag_original = g_annotations[hit].boundary;
+                RECT screen = annotation_screen_rect(hwnd, &g.annotations[hit].boundary);
+                g.drag_mode = abs(client.x - screen.right) <= 9 && abs(client.y - screen.bottom) <= 9 ? 2 : 1;
+                g.drag_start = image;
+                g.drag_original = g.annotations[hit].boundary;
                 push_undo();
                 SetCapture(hwnd);
                 set_editor_cursor();
             } else {
                 deselect_annotation();
-                g_panning = TRUE;
-                g_pan_start = client;
-                g_pan_origin_x = g_pan_x;
-                g_pan_origin_y = g_pan_y;
+                g.panning = TRUE;
+                g.pan_start = client;
+                g.pan_origin_x = g.pan_x;
+                g.pan_origin_y = g.pan_y;
                 SetCapture(hwnd);
                 set_editor_cursor();
             }
@@ -1061,40 +1107,40 @@ static LRESULT CALLBACK EditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_MOUSEMOVE:
         update_annotation_hover(hwnd,
             (POINT){GET_X_LPARAM(lp), GET_Y_LPARAM(lp)});
-        if (g_panning) {
-            g_pan_x = g_pan_origin_x + GET_X_LPARAM(lp) - g_pan_start.x;
-            g_pan_y = g_pan_origin_y + GET_Y_LPARAM(lp) - g_pan_start.y;
+        if (g.panning) {
+            g.pan_x = g.pan_origin_x + GET_X_LPARAM(lp) - g.pan_start.x;
+            g.pan_y = g.pan_origin_y + GET_Y_LPARAM(lp) - g.pan_start.y;
             InvalidateRect(hwnd, NULL, FALSE);
             return 0;
         }
-        if (g_drag_mode || g_drawing) {
+        if (g.drag_mode || g.drawing) {
             POINT client = {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)}, image;
             RECT dest; double scale; image_layout(hwnd, &dest, &scale);
             image.x = (LONG)((client.x - dest.left) / scale);
             image.y = (LONG)((client.y - dest.top) / scale);
-            image.x = min((LONG)g_image_w, max(0, image.x));
-            image.y = min((LONG)g_image_h, max(0, image.y));
-            if (g_drawing) g_draw_current = image;
-            else if (g_selected >= 0) {
-                RECT *r = &g_annotations[g_selected].boundary;
-                if (g_drag_mode == 1) {
-                    int dx = image.x - g_drag_start.x, dy = image.y - g_drag_start.y;
-                    int width = g_drag_original.right - g_drag_original.left;
-                    int height = g_drag_original.bottom - g_drag_original.top;
-                    r->left = min((LONG)g_image_w - width, max(0, g_drag_original.left + dx));
-                    r->top = min((LONG)g_image_h - height, max(0, g_drag_original.top + dy));
+            image.x = min((LONG)g.image_w, max(0, image.x));
+            image.y = min((LONG)g.image_h, max(0, image.y));
+            if (g.drawing) g.draw_current = image;
+            else if (g.selected >= 0) {
+                RECT *r = &g.annotations[g.selected].boundary;
+                if (g.drag_mode == 1) {
+                    int dx = image.x - g.drag_start.x, dy = image.y - g.drag_start.y;
+                    int width = g.drag_original.right - g.drag_original.left;
+                    int height = g.drag_original.bottom - g.drag_original.top;
+                    r->left = min((LONG)g.image_w - width, max(0, g.drag_original.left + dx));
+                    r->top = min((LONG)g.image_h - height, max(0, g.drag_original.top + dy));
                     r->right = r->left + width; r->bottom = r->top + height;
                 } else {
-                    r->right = min((LONG)g_image_w, max(r->left + 1, image.x));
-                    r->bottom = min((LONG)g_image_h, max(r->top + 1, image.y));
+                    r->right = min((LONG)g.image_w, max(r->left + 1, image.x));
+                    r->bottom = min((LONG)g.image_h, max(r->top + 1, image.y));
                 }
-                g_dirty = TRUE;
+                g.dirty = TRUE;
             }
             InvalidateRect(hwnd, NULL, FALSE);
         }
         return 0;
     case WM_MOUSELEAVE:
-        g_editor_mouse_tracking = FALSE;
+        g.editor_mouse_tracking = FALSE;
         hide_annotation_tooltip(hwnd);
         return 0;
     case WM_TIMER:
@@ -1104,51 +1150,51 @@ static LRESULT CALLBACK EditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         break;
     case WM_LBUTTONUP:
-        if (g_panning) {
-            g_panning = FALSE;
+        if (g.panning) {
+            g.panning = FALSE;
             ReleaseCapture();
             set_editor_cursor();
-            if (g_preview_mode) request_preview_frame();
+            if (g.preview_mode) request_preview_frame();
             InvalidateRect(hwnd, NULL, FALSE);
             return 0;
         }
-        if (g_drag_mode) {
-            g_drag_mode = 0;
+        if (g.drag_mode) {
+            g.drag_mode = 0;
             ReleaseCapture();
             set_editor_cursor();
             InvalidateRect(hwnd, NULL, FALSE);
-        } else if (g_drawing) {
+        } else if (g.drawing) {
             ReleaseCapture();
-            g_drawing = FALSE;
-            RECT r = golden_normalize_rect(g_draw_start, g_draw_current);
+            g.drawing = FALSE;
+            RECT r = golden_normalize_rect(g.draw_start, g.draw_current);
             if (r.right - r.left >= 2 && r.bottom - r.top >= 2) {
                 push_undo();
-                Annotation *a = &g_annotations[g_annotation_count];
+                Annotation *a = &g.annotations[g.annotation_count];
                 ZeroMemory(a, sizeof(*a));
                 make_unique_name(a->name, _countof(a->name));
                 a->boundary = r;
-                g_selected = g_annotation_count++;
-                g_dirty = TRUE;
+                g.selected = g.annotation_count++;
+                g.dirty = TRUE;
                 refresh_annotation_tree();
-                HTREEITEM item = find_annotation_item(g_selected);
-                if (item) PostMessageW(g_main, WM_BEGIN_TREE_RENAME, 0, (LPARAM)item);
+                HTREEITEM item = find_annotation_item(g.selected);
+                if (item) PostMessageW(g.main, WM_BEGIN_TREE_RENAME, 0, (LPARAM)item);
             }
             InvalidateRect(hwnd, NULL, FALSE);
         }
         return 0;
     case WM_MBUTTONDOWN:
-        g_panning = TRUE;
-        g_pan_start = (POINT){GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
-        g_pan_origin_x = g_pan_x; g_pan_origin_y = g_pan_y;
+        g.panning = TRUE;
+        g.pan_start = (POINT){GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
+        g.pan_origin_x = g.pan_x; g.pan_origin_y = g.pan_y;
         SetCapture(hwnd);
         set_editor_cursor();
         return 0;
     case WM_MBUTTONUP:
-        if (g_panning) {
-            g_panning = FALSE;
+        if (g.panning) {
+            g.panning = FALSE;
             ReleaseCapture();
             set_editor_cursor();
-            if (g_preview_mode) request_preview_frame();
+            if (g.preview_mode) request_preview_frame();
         }
         return 0;
     case WM_MOUSEWHEEL: {
@@ -1158,25 +1204,25 @@ static LRESULT CALLBACK EditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     }
     case WM_LBUTTONDBLCLK:
-        if (!g_preview_mode && g_tool == TOOL_SELECT) rename_selected();
+        if (!g.preview_mode && g.tool == TOOL_SELECT) rename_selected();
         return 0;
     case WM_KEYDOWN:
         if (wp == VK_DELETE) delete_selected();
         else if (wp == VK_F2) rename_selected();
         else if (wp == 'Z' && GetKeyState(VK_CONTROL) < 0) undo_action();
         else if (wp == 'Y' && GetKeyState(VK_CONTROL) < 0) redo_action();
-        else if (wp == '0') { g_zoom = 0.0; g_pan_x = g_pan_y = 0; InvalidateRect(hwnd, NULL, FALSE); }
-        else if (wp == '1') { g_zoom = 1.0; g_pan_x = g_pan_y = 0; InvalidateRect(hwnd, NULL, FALSE); }
+        else if (wp == '0') { g.zoom = 0.0; g.pan_x = g.pan_y = 0; InvalidateRect(hwnd, NULL, FALSE); }
+        else if (wp == '1') { g.zoom = 1.0; g.pan_x = g.pan_y = 0; InvalidateRect(hwnd, NULL, FALSE); }
         return 0;
     case WM_CAPTURECHANGED:
-        g_panning = FALSE;
-        g_drag_mode = 0;
-        g_drawing = FALSE;
+        g.panning = FALSE;
+        g.drag_mode = 0;
+        g.drawing = FALSE;
         set_editor_cursor();
         return 0;
     case WM_NCDESTROY:
-        golden_image_cache_release(&g_image_cache);
-        golden_back_buffer_release(&g_editor_buffer);
+        golden_image_cache_release(&g.image_cache);
+        golden_back_buffer_release(&g.editor_buffer);
         break;
     }
     return DefWindowProcW(hwnd, msg, wp, lp);
@@ -1184,53 +1230,53 @@ static LRESULT CALLBACK EditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
 static void refresh_windows(void) {
     GoldenWindowInfo next[MAX_WINDOWS];
-    int next_count = golden_collect_windows(g_main, next, MAX_WINDOWS);
-    if (golden_window_lists_equal(g_window_items, g_window_count, next, next_count)) return;
+    int next_count = golden_collect_windows(g.main, next, MAX_WINDOWS);
+    if (golden_window_lists_equal(g.window_items, g.window_count, next, next_count)) return;
     HWND selected_window = selected_capture_window();
-    g_rebuilding_windows = TRUE;
-    TreeView_DeleteAllItems(g_windows);
-    memcpy(g_window_items, next,
+    g.rebuilding_windows = TRUE;
+    TreeView_DeleteAllItems(g.windows);
+    memcpy(g.window_items, next,
            sizeof(GoldenWindowInfo) * (size_t)next_count);
-    g_window_count = next_count;
+    g.window_count = next_count;
     HTREEITEM group = NULL, selected_item = NULL;
     wchar_t previous[128] = L"";
-    for (int i = 0; i < g_window_count; ++i) {
-        if (_wcsicmp(previous, g_window_items[i].app)) {
-            if (group) TreeView_Expand(g_windows, group, TVE_EXPAND);
-            wcscpy(previous, g_window_items[i].app);
+    for (int i = 0; i < g.window_count; ++i) {
+        if (_wcsicmp(previous, g.window_items[i].app)) {
+            if (group) TreeView_Expand(g.windows, group, TVE_EXPAND);
+            wcscpy(previous, g.window_items[i].app);
             TVINSERTSTRUCTW insert = {0};
             insert.hParent = TVI_ROOT; insert.hInsertAfter = TVI_LAST;
             insert.item.mask = TVIF_TEXT;
-            insert.item.pszText = g_window_items[i].app;
-            group = TreeView_InsertItem(g_windows, &insert);
+            insert.item.pszText = g.window_items[i].app;
+            group = TreeView_InsertItem(g.windows, &insert);
         }
         TVINSERTSTRUCTW insert = {0};
         insert.hParent = group; insert.hInsertAfter = TVI_LAST;
         insert.item.mask = TVIF_TEXT | TVIF_PARAM;
-        insert.item.pszText = g_window_items[i].title;
-        insert.item.lParam = (LPARAM)g_window_items[i].id;
-        HTREEITEM leaf = TreeView_InsertItem(g_windows, &insert);
-        if ((HWND)g_window_items[i].id == selected_window) selected_item = leaf;
+        insert.item.pszText = g.window_items[i].title;
+        insert.item.lParam = (LPARAM)g.window_items[i].id;
+        HTREEITEM leaf = TreeView_InsertItem(g.windows, &insert);
+        if ((HWND)g.window_items[i].id == selected_window) selected_item = leaf;
     }
-    if (group) TreeView_Expand(g_windows, group, TVE_EXPAND);
-    if (selected_item) TreeView_SelectItem(g_windows, selected_item);
-    g_rebuilding_windows = FALSE;
-    if (g_preview_target) {
+    if (group) TreeView_Expand(g.windows, group, TVE_EXPAND);
+    if (selected_item) TreeView_SelectItem(g.windows, selected_item);
+    g.rebuilding_windows = FALSE;
+    if (g.preview_target) {
         BOOL found = FALSE;
-        for (int i = 0; i < g_window_count; ++i)
-            if ((HWND)g_window_items[i].id == g_preview_target) { found = TRUE; break; }
-        if (!found) { clear_preview(); InvalidateRect(g_editor, NULL, FALSE); }
+        for (int i = 0; i < g.window_count; ++i)
+            if ((HWND)g.window_items[i].id == g.preview_target) { found = TRUE; break; }
+        if (!found) { clear_preview(); InvalidateRect(g.editor, NULL, FALSE); }
     }
     update_capture_availability();
 }
 
 static HWND selected_capture_window(void) {
-    if (!g_windows) return NULL;
-    HTREEITEM selected = TreeView_GetSelection(g_windows);
+    if (!g.windows) return NULL;
+    HTREEITEM selected = TreeView_GetSelection(g.windows);
     if (!selected) return NULL;
     TVITEMW item = {0};
     item.mask = TVIF_PARAM; item.hItem = selected;
-    if (!TreeView_GetItem(g_windows, &item) || !item.lParam) return NULL;
+    if (!TreeView_GetItem(g.windows, &item) || !item.lParam) return NULL;
     HWND target = (HWND)item.lParam;
     return IsWindow(target) ? target : NULL;
 }
@@ -1239,13 +1285,13 @@ static HWND clicked_capture_window(void) {
     DWORD position = GetMessagePos();
     TVHITTESTINFO hit = {0};
     hit.pt = (POINT){GET_X_LPARAM(position), GET_Y_LPARAM(position)};
-    ScreenToClient(g_windows, &hit.pt);
-    TreeView_HitTest(g_windows, &hit);
+    ScreenToClient(g.windows, &hit.pt);
+    TreeView_HitTest(g.windows, &hit);
     if (!hit.hItem || !(hit.flags & TVHT_ONITEM)) return NULL;
     TVITEMW item = {0};
     item.mask = TVIF_PARAM;
     item.hItem = hit.hItem;
-    if (!TreeView_GetItem(g_windows, &item)) return NULL;
+    if (!TreeView_GetItem(g.windows, &item)) return NULL;
     HWND target = (HWND)item.lParam;
     return target && IsWindow(target) ? target : NULL;
 }
@@ -1254,33 +1300,33 @@ static ResourceTreeNode *clicked_resource_node(void) {
     DWORD position = GetMessagePos();
     TVHITTESTINFO hit = {0};
     hit.pt = (POINT){GET_X_LPARAM(position), GET_Y_LPARAM(position)};
-    ScreenToClient(g_tree, &hit.pt);
-    TreeView_HitTest(g_tree, &hit);
+    ScreenToClient(g.tree, &hit.pt);
+    TreeView_HitTest(g.tree, &hit);
     if (!hit.hItem || !(hit.flags & TVHT_ONITEM)) return NULL;
     return tree_node_data(hit.hItem);
 }
 
 static ResourceTreeNode *selected_active_resource_node(void) {
-    if (!g_tree || !g_image_path[0]) return NULL;
-    ResourceTreeNode *node = tree_node_data(TreeView_GetSelection(g_tree));
+    if (!g.tree || !g.image_path[0]) return NULL;
+    ResourceTreeNode *node = tree_node_data(TreeView_GetSelection(g.tree));
     if (!node) return NULL;
     if (node->kind == RESOURCE_PNG)
-        return node->path && !_wcsicmp(node->path, g_image_path) ? node : NULL;
+        return node->path && !_wcsicmp(node->path, g.image_path) ? node : NULL;
     if (node->kind == RESOURCE_ANNOTATION && node->annotation_index >= 0 &&
-        node->annotation_index < g_annotation_count) return node;
+        node->annotation_index < g.annotation_count) return node;
     return NULL;
 }
 
 static void update_capture_availability(void) {
     BOOL window_selected = selected_capture_window() != NULL;
     BOOL resource_selected = selected_active_resource_node() != NULL;
-    if (g_window_buttons[0]) EnableWindow(g_window_buttons[0], window_selected);
-    if (g_window_buttons[1])
-        EnableWindow(g_window_buttons[1], window_selected && resource_selected);
-    if (g_capture_menu) {
-        EnableMenuItem(g_capture_menu, ID_CAPTURE, MF_BYCOMMAND |
+    if (g.window_buttons[0]) EnableWindow(g.window_buttons[0], window_selected);
+    if (g.window_buttons[1])
+        EnableWindow(g.window_buttons[1], window_selected && resource_selected);
+    if (g.capture_menu) {
+        EnableMenuItem(g.capture_menu, ID_CAPTURE, MF_BYCOMMAND |
             (window_selected ? MF_ENABLED : MF_GRAYED));
-        EnableMenuItem(g_capture_menu, ID_RECAPTURE, MF_BYCOMMAND |
+        EnableMenuItem(g.capture_menu, ID_RECAPTURE, MF_BYCOMMAND |
             (window_selected && resource_selected ? MF_ENABLED : MF_GRAYED));
     }
 }
@@ -1292,7 +1338,7 @@ static void clear_tree_selection_on_blank_click(HWND tree) {
     ScreenToClient(tree, &hit.pt);
     TreeView_HitTest(tree, &hit);
     if (hit.flags & (TVHT_ONITEM | TVHT_ONITEMBUTTON)) return;
-    if (tree == g_tree) {
+    if (tree == g.tree) {
         HTREEITEM selected = TreeView_GetSelection(tree);
         ResourceTreeNode *node = tree_node_data(selected);
         if (node && node->kind == RESOURCE_ANNOTATION) {
@@ -1313,48 +1359,48 @@ static BOOL capture_preview_frame(HWND target, GoldenPreviewSurface *surface,
 }
 
 static void request_preview_frame(void) {
-    if (!g_preview_mode || !g_preview_target || g_preview_loading ||
-        g_panning || IsIconic(g_main)) return;
-    if (!IsWindow(g_preview_target)) {
+    if (!g.preview_mode || !g.preview_target || g.preview_loading ||
+        g.panning || IsIconic(g.main)) return;
+    if (!IsWindow(g.preview_target)) {
         clear_preview();
-        InvalidateRect(g_editor, NULL, FALSE);
+        InvalidateRect(g.editor, NULL, FALSE);
         return;
     }
-    g_preview_loading = golden_preview_service_request(
-        &g_preview_service, g_preview_target, g_preview_generation);
+    g.preview_loading = golden_preview_service_request(
+        &g.preview_service, g.preview_target, g.preview_generation);
 }
 
 static void preview_window(HWND target) {
-    if (!target || !IsWindow(target) || target == g_main) return;
-    if (target == g_preview_target && g_preview_mode) {
+    if (!target || !IsWindow(target) || target == g.main) return;
+    if (target == g.preview_target && g.preview_mode) {
         request_preview_frame();
         return;
     }
     clear_preview();
-    g_preview_target = target;
-    GetWindowTextW(target, g_preview_title, _countof(g_preview_title));
-    g_preview_mode = TRUE;
+    g.preview_target = target;
+    GetWindowTextW(target, g.preview_title, _countof(g.preview_title));
+    g.preview_mode = TRUE;
     update_tool_availability();
-    g_zoom = 0.0;
-    g_pan_x = g_pan_y = 0;
+    g.zoom = 0.0;
+    g.pan_x = g.pan_y = 0;
     update_context_label();
     request_preview_frame();
-    InvalidateRect(g_editor, NULL, FALSE);
+    InvalidateRect(g.editor, NULL, FALSE);
 }
 
 static void refresh_preview_metadata(void) {
-    if (!g_preview_target) return;
-    if (!IsWindow(g_preview_target)) {
+    if (!g.preview_target) return;
+    if (!IsWindow(g.preview_target)) {
         clear_preview();
-        InvalidateRect(g_editor, NULL, FALSE);
+        InvalidateRect(g.editor, NULL, FALSE);
         return;
     }
     wchar_t title[256] = L"";
-    GetWindowTextW(g_preview_target, title, _countof(title));
-    if (wcscmp(title, g_preview_title)) {
-        wcscpy(g_preview_title, title);
+    GetWindowTextW(g.preview_target, title, _countof(title));
+    if (wcscmp(title, g.preview_title)) {
+        wcscpy(g.preview_title, title);
         update_context_label();
-        InvalidateRect(g_editor, NULL, FALSE);
+        InvalidateRect(g.editor, NULL, FALSE);
     }
 }
 
@@ -1365,7 +1411,7 @@ static BOOL capture_window_to(HWND target, const wchar_t *path) {
     GetWindowPlacement(target, &placement);
     BOOL was_minimized = IsIconic(target);
     ShowWindow(target, SW_RESTORE);
-    ShowWindow(g_main, SW_MINIMIZE);
+    ShowWindow(g.main, SW_MINIMIZE);
     SetForegroundWindow(target);
     Sleep(350);
     RECT rect;
@@ -1404,8 +1450,8 @@ static BOOL capture_window_to(HWND target, const wchar_t *path) {
         ReleaseDC(NULL, screen);
     }
     if (was_minimized) ShowWindow(target, SW_MINIMIZE);
-    ShowWindow(g_main, SW_RESTORE);
-    SetForegroundWindow(g_main);
+    ShowWindow(g.main, SW_RESTORE);
+    SetForegroundWindow(g.main);
     if (!ok) show_error(L"The selected window could not be captured.");
     return ok;
 }
@@ -1435,8 +1481,12 @@ static BOOL rename_resource_file(const wchar_t *old_path, const wchar_t *edited_
         return FALSE;
     }
     wchar_t directory[MAX_PATH * 4], new_path[MAX_PATH * 4];
-    parent_dir_for(old_path, directory, _countof(directory));
-    _snwprintf(new_path, _countof(new_path), L"%s\\%s.png", directory, name);
+    if (!parent_dir_for(old_path, directory, _countof(directory)) ||
+        !golden_path_join_extension(directory, name, L".png",
+                                    new_path, _countof(new_path))) {
+        show_error(L"The renamed resource path is too long.");
+        return FALSE;
+    }
     if (!wcscmp(old_path, new_path)) return TRUE;
 
     GoldenResourceRenameResult result = golden_rename_resource_pair(old_path, new_path);
@@ -1445,6 +1495,8 @@ static BOOL rename_resource_file(const wchar_t *old_path, const wchar_t *edited_
             L"A PNG with that resource name already exists in this directory." :
             result == GOLDEN_RENAME_JSON_EXISTS ?
             L"A JSON annotation file with that resource name already exists." :
+            result == GOLDEN_RENAME_INVALID_PATH ?
+            L"The PNG or JSON resource path is invalid or too long." :
             result == GOLDEN_RENAME_JSON_FAILED_ROLLED_BACK ?
             L"The JSON file could not be renamed, so the PNG rename was rolled back." :
             result == GOLDEN_RENAME_ROLLBACK_FAILED ?
@@ -1453,18 +1505,16 @@ static BOOL rename_resource_file(const wchar_t *old_path, const wchar_t *edited_
         show_error(message);
         return FALSE;
     }
-    if (!_wcsicmp(g_image_path, old_path)) {
-        wcsncpy(g_image_path, new_path, _countof(g_image_path) - 1);
-        g_image_path[_countof(g_image_path) - 1] = 0;
+    if (!_wcsicmp(g.image_path, old_path)) {
+        golden_path_copy(new_path, g.image_path, _countof(g.image_path));
         update_context_label();
         wchar_t title[MAX_PATH * 4 + 32];
         _snwprintf(title, _countof(title), L"Goldens — %s", PathFindFileNameW(new_path));
-        SetWindowTextW(g_main, title);
+        SetWindowTextW(g.main, title);
     }
-    wcsncpy(g_pending_resource_selection, new_path,
-            _countof(g_pending_resource_selection) - 1);
-    g_pending_resource_selection[_countof(g_pending_resource_selection) - 1] = 0;
-    PostMessageW(g_main, WM_RESOURCE_RENAMED, 0, 0);
+    golden_path_copy(new_path, g.pending_resource_selection,
+                     _countof(g.pending_resource_selection));
+    PostMessageW(g.main, WM_RESOURCE_RENAMED, 0, 0);
     return TRUE;
 }
 
@@ -1473,14 +1523,14 @@ static BOOL begin_tree_rename(HTREEITEM item) {
     if (!node || (node->kind != RESOURCE_PNG && node->kind != RESOURCE_ANNOTATION))
         return FALSE;
     if (node->kind == RESOURCE_ANNOTATION &&
-        node->annotation_index >= 0 && node->annotation_index < g_annotation_count) {
+        node->annotation_index >= 0 && node->annotation_index < g.annotation_count) {
         clear_preview();
-        g_selected = node->annotation_index;
+        g.selected = node->annotation_index;
         update_tool_availability();
-        InvalidateRect(g_editor, NULL, FALSE);
+        InvalidateRect(g.editor, NULL, FALSE);
     }
-    TreeView_SelectItem(g_tree, item);
-    HWND edit = TreeView_EditLabel(g_tree, item);
+    TreeView_SelectItem(g.tree, item);
+    HWND edit = TreeView_EditLabel(g.tree, item);
     if (edit) {
         SendMessageW(edit, EM_LIMITTEXT,
             node->kind == RESOURCE_ANNOTATION ? 127 : 255, 0);
@@ -1490,18 +1540,18 @@ static BOOL begin_tree_rename(HTREEITEM item) {
 }
 
 static BOOL ensure_capture_directory(void) {
-    const wchar_t *candidate = g_current_dir[0] ? g_current_dir : g_root;
+    const wchar_t *candidate = g.current_dir[0] ? g.current_dir : g.root;
     DWORD attrs = GetFileAttributesW(candidate);
     if (candidate[0] && attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY))
         return TRUE;
     wchar_t cwd[MAX_PATH * 4];
-    if (!GetCurrentDirectoryW(_countof(cwd), cwd)) return FALSE;
+    DWORD length = GetCurrentDirectoryW(_countof(cwd), cwd);
+    if (!length || length >= _countof(cwd)) return FALSE;
     attrs = GetFileAttributesW(cwd);
     if (attrs == INVALID_FILE_ATTRIBUTES || !(attrs & FILE_ATTRIBUTE_DIRECTORY)) return FALSE;
-    wcsncpy(g_root, cwd, _countof(g_root) - 1);
-    wcsncpy(g_current_dir, cwd, _countof(g_current_dir) - 1);
-    g_root[_countof(g_root) - 1] = 0;
-    g_current_dir[_countof(g_current_dir) - 1] = 0;
+    if (!golden_path_copy(cwd, g.root, _countof(g.root)) ||
+        !golden_path_copy(cwd, g.current_dir, _countof(g.current_dir)))
+        return FALSE;
     refresh_resources();
     update_status();
     return TRUE;
@@ -1512,12 +1562,16 @@ static void capture_new(void) {
     if (!target) { show_error(L"Select a window in the right column first."); return; }
     if (!ensure_capture_directory()) { show_error(L"The current directory is not available for captures."); return; }
     wchar_t name[128] = L"";
-    if (!prompt_text(g_main, L"New screenshot", L"Resource name (without .png):", name, _countof(name))) return;
+    if (!prompt_text(g.main, L"New screenshot", L"Resource name (without .png):", name, _countof(name))) return;
     normalize_capture_name(name);
     if (!valid_capture_name(name)) { show_error(L"Enter a valid Windows file name without path characters."); return; }
-    const wchar_t *dir = g_current_dir[0] ? g_current_dir : g_root;
+    const wchar_t *dir = g.current_dir[0] ? g.current_dir : g.root;
     wchar_t path[MAX_PATH * 4];
-    _snwprintf(path, _countof(path), L"%s\\%s.png", dir, name);
+    if (!golden_path_join_extension(dir, name, L".png",
+                                    path, _countof(path))) {
+        show_error(L"The capture path is too long.");
+        return;
+    }
     if (GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES) {
         show_error(L"A PNG with that name already exists in this directory."); return;
     }
@@ -1535,27 +1589,27 @@ static void recapture_current(void) {
         show_error(L"Select an existing PNG resource to recapture.");
         return;
     }
-    if (MessageBoxW(g_main, L"Replace the current PNG while preserving its annotations?",
+    if (MessageBoxW(g.main, L"Replace the current PNG while preserving its annotations?",
                     APP_NAME, MB_OKCANCEL | MB_ICONQUESTION) != IDOK) return;
-    if (capture_window_to(target, g_image_path)) {
+    if (capture_window_to(target, g.image_path)) {
         clear_preview();
-        if (load_png(g_image_path)) g_resource_visible = TRUE;
-        g_zoom = 0.0;
-        g_pan_x = g_pan_y = 0;
-        InvalidateRect(g_editor, NULL, FALSE);
+        if (load_png(g.image_path)) g.resource_visible = TRUE;
+        g.zoom = 0.0;
+        g.pan_x = g.pan_y = 0;
+        InvalidateRect(g.editor, NULL, FALSE);
     }
 }
 
 static void toggle_splitter(HWND splitter) {
-    if (splitter == g_left_splitter) g_left_collapsed = !g_left_collapsed;
-    else if (splitter == g_right_splitter) g_right_collapsed = !g_right_collapsed;
-    layout_children(g_main);
-    InvalidateRect(g_left_splitter, NULL, TRUE);
-    InvalidateRect(g_right_splitter, NULL, TRUE);
+    if (splitter == g.left_splitter) g.left_collapsed = !g.left_collapsed;
+    else if (splitter == g.right_splitter) g.right_collapsed = !g.right_collapsed;
+    layout_children(g.main);
+    InvalidateRect(g.left_splitter, NULL, TRUE);
+    InvalidateRect(g.right_splitter, NULL, TRUE);
 }
 
 static LRESULT CALLBACK SplitterProc(HWND hwnd, UINT message, WPARAM wp, LPARAM lp) {
-    BOOL left = hwnd == g_left_splitter;
+    BOOL left = hwnd == g.left_splitter;
     switch (message) {
     case WM_ERASEBKGND:
         return 1;
@@ -1565,7 +1619,7 @@ static LRESULT CALLBACK SplitterProc(HWND hwnd, UINT message, WPARAM wp, LPARAM 
         RECT client;
         GetClientRect(hwnd, &client);
         FillRect(dc, &client, GetSysColorBrush(COLOR_BTNFACE));
-        BOOL collapsed = left ? g_left_collapsed : g_right_collapsed;
+        BOOL collapsed = left ? g.left_collapsed : g.right_collapsed;
         RECT indicator = client;
         if (collapsed) {
             int thickness = max(3, client.right / 4);
@@ -1583,51 +1637,51 @@ static LRESULT CALLBACK SplitterProc(HWND hwnd, UINT message, WPARAM wp, LPARAM 
         SetCursor(LoadCursorW(NULL, IDC_SIZEWE));
         return TRUE;
     case WM_LBUTTONDOWN: {
-        BOOL collapsed = left ? g_left_collapsed : g_right_collapsed;
-        g_splitter_dragging = TRUE;
-        g_splitter_drag_start = (POINT){GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
-        ClientToScreen(hwnd, &g_splitter_drag_start);
-        g_splitter_width_start = 0;
+        BOOL collapsed = left ? g.left_collapsed : g.right_collapsed;
+        g.splitter_dragging = TRUE;
+        g.splitter_drag_start = (POINT){GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
+        ClientToScreen(hwnd, &g.splitter_drag_start);
+        g.splitter_width_start = 0;
         if (!collapsed) {
             RECT pane;
-            GetWindowRect(left ? g_tree : g_windows, &pane);
-            g_splitter_width_start = MulDiv(pane.right - pane.left, 96,
-                                            (int)GetDpiForWindow(g_main));
+            GetWindowRect(left ? g.tree : g.windows, &pane);
+            g.splitter_width_start = MulDiv(pane.right - pane.left, 96,
+                                            (int)GetDpiForWindow(g.main));
         }
         SetCapture(hwnd);
         return 0;
     }
     case WM_MOUSEMOVE:
-        if (g_splitter_dragging && GetCapture() == hwnd) {
+        if (g.splitter_dragging && GetCapture() == hwnd) {
             POINT current = {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
             ClientToScreen(hwnd, &current);
-            int delta = MulDiv(current.x - g_splitter_drag_start.x, 96,
-                               (int)GetDpiForWindow(g_main));
-            int width = left ? g_splitter_width_start + delta :
-                               g_splitter_width_start - delta;
+            int delta = MulDiv(current.x - g.splitter_drag_start.x, 96,
+                               (int)GetDpiForWindow(g.main));
+            int width = left ? g.splitter_width_start + delta :
+                               g.splitter_width_start - delta;
             int minimum = left ? GOLDEN_RESOURCE_PANE_MIN : GOLDEN_WINDOWS_PANE_MIN;
             int maximum = left ? 520 : 560;
-            BOOL *collapsed = left ? &g_left_collapsed : &g_right_collapsed;
-            int *preferred = left ? &g_left_column_width : &g_right_column_width;
+            BOOL *collapsed = left ? &g.left_collapsed : &g.right_collapsed;
+            int *preferred = left ? &g.left_column_width : &g.right_column_width;
             BOOL next_collapsed = golden_pane_should_collapse(width, minimum, *collapsed);
             if (next_collapsed != *collapsed) {
                 *collapsed = next_collapsed;
                 InvalidateRect(hwnd, NULL, TRUE);
             }
             if (!next_collapsed) *preferred = max(minimum, min(maximum, width));
-            layout_children(g_main);
+            layout_children(g.main);
         }
         return 0;
     case WM_LBUTTONUP:
-        if (g_splitter_dragging && GetCapture() == hwnd) ReleaseCapture();
-        g_splitter_dragging = FALSE;
+        if (g.splitter_dragging && GetCapture() == hwnd) ReleaseCapture();
+        g.splitter_dragging = FALSE;
         return 0;
     case WM_CAPTURECHANGED:
-        g_splitter_dragging = FALSE;
+        g.splitter_dragging = FALSE;
         return 0;
     case WM_LBUTTONDBLCLK:
         if (GetCapture() == hwnd) ReleaseCapture();
-        g_splitter_dragging = FALSE;
+        g.splitter_dragging = FALSE;
         toggle_splitter(hwnd);
         return 0;
     }
@@ -1640,25 +1694,25 @@ static LRESULT CALLBACK ToolButtonProc(HWND hwnd, UINT message, WPARAM wp,
     int index = (int)reference;
     switch (message) {
     case WM_MOUSEMOVE:
-        if (IsWindowEnabled(hwnd) && g_hovered_tool != index) {
-            int previous = g_hovered_tool;
-            g_hovered_tool = index;
+        if (IsWindowEnabled(hwnd) && g.hovered_tool != index) {
+            int previous = g.hovered_tool;
+            g.hovered_tool = index;
             if (previous >= 0 && previous < GOLDEN_TOOL_BUTTON_COUNT &&
-                g_tool_buttons[previous])
-                InvalidateRect(g_tool_buttons[previous], NULL, FALSE);
+                g.tool_buttons[previous])
+                InvalidateRect(g.tool_buttons[previous], NULL, FALSE);
             InvalidateRect(hwnd, NULL, FALSE);
             TRACKMOUSEEVENT tracking = {sizeof(tracking), TME_LEAVE, hwnd, 0};
             TrackMouseEvent(&tracking);
         }
         break;
     case WM_MOUSELEAVE:
-        if (g_hovered_tool == index) {
-            g_hovered_tool = -1;
+        if (g.hovered_tool == index) {
+            g.hovered_tool = -1;
             InvalidateRect(hwnd, NULL, FALSE);
         }
         break;
     case WM_ENABLE:
-        if (!wp && g_hovered_tool == index) g_hovered_tool = -1;
+        if (!wp && g.hovered_tool == index) g.hovered_tool = -1;
         InvalidateRect(hwnd, NULL, FALSE);
         break;
     case WM_NCDESTROY:
@@ -1674,8 +1728,8 @@ static void draw_tool_button(const DRAWITEMSTRUCT *item) {
     int index = (int)item->CtlID - ID_TOOL_SELECT;
     BOOL disabled = (item->itemState & ODS_DISABLED) != 0;
     BOOL pressed = (item->itemState & ODS_SELECTED) != 0;
-    BOOL selected = index == (int)g_tool;
-    BOOL hovered = index == g_hovered_tool && !disabled;
+    BOOL selected = index == (int)g.tool;
+    BOOL hovered = index == g.hovered_tool && !disabled;
 
     COLORREF background = GetSysColor(COLOR_BTNFACE);
     COLORREF border = GetSysColor(COLOR_3DSHADOW);
@@ -1736,49 +1790,49 @@ static void layout_children(HWND hwnd) {
     GetClientRect(hwnd, &client);
     GoldenUiLayout layout = golden_compute_ui_layout(
         client.right, client.bottom, GetDpiForWindow(hwnd),
-        g_left_column_width, g_right_column_width,
-        g_left_collapsed, g_right_collapsed);
-    ShowWindow(g_tree, g_left_collapsed ? SW_HIDE : SW_SHOWNA);
-    ShowWindow(g_windows, g_right_collapsed ? SW_HIDE : SW_SHOWNA);
+        g.left_column_width, g.right_column_width,
+        g.left_collapsed, g.right_collapsed);
+    ShowWindow(g.tree, g.left_collapsed ? SW_HIDE : SW_SHOWNA);
+    ShowWindow(g.windows, g.right_collapsed ? SW_HIDE : SW_SHOWNA);
     for (int i = 0; i < 2; ++i)
-        ShowWindow(g_window_buttons[i], g_right_collapsed ? SW_HIDE : SW_SHOWNA);
+        ShowWindow(g.window_buttons[i], g.right_collapsed ? SW_HIDE : SW_SHOWNA);
 #define PLACE_CONTROL(control, rectangle) \
     SetWindowPos((control), NULL, (rectangle).left, (rectangle).top, \
         (rectangle).right - (rectangle).left, (rectangle).bottom - (rectangle).top, \
         SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOREDRAW)
-    PLACE_CONTROL(g_tree, layout.resource_tree);
-    PLACE_CONTROL(g_left_splitter, layout.left_splitter);
+    PLACE_CONTROL(g.tree, layout.resource_tree);
+    PLACE_CONTROL(g.left_splitter, layout.left_splitter);
     for (int i = 0; i < GOLDEN_TOOL_BUTTON_COUNT; ++i)
-        PLACE_CONTROL(g_tool_buttons[i], layout.tool_buttons[i]);
-    PLACE_CONTROL(g_context_label, layout.context_label);
-    PLACE_CONTROL(g_editor, layout.editor);
+        PLACE_CONTROL(g.tool_buttons[i], layout.tool_buttons[i]);
+    PLACE_CONTROL(g.context_label, layout.context_label);
+    PLACE_CONTROL(g.editor, layout.editor);
     for (int i = 0; i < GOLDEN_VIEW_BUTTON_COUNT; ++i)
-        PLACE_CONTROL(g_view_buttons[i], layout.view_buttons[i]);
-    for (int i = 0; i < 2; ++i) PLACE_CONTROL(g_window_buttons[i], layout.window_buttons[i]);
-    PLACE_CONTROL(g_right_splitter, layout.right_splitter);
-    PLACE_CONTROL(g_windows, layout.window_tree);
-    PLACE_CONTROL(g_status, layout.status);
+        PLACE_CONTROL(g.view_buttons[i], layout.view_buttons[i]);
+    for (int i = 0; i < 2; ++i) PLACE_CONTROL(g.window_buttons[i], layout.window_buttons[i]);
+    PLACE_CONTROL(g.right_splitter, layout.right_splitter);
+    PLACE_CONTROL(g.windows, layout.window_tree);
+    PLACE_CONTROL(g.status, layout.status);
 #undef PLACE_CONTROL
     RedrawWindow(hwnd, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
 }
 
 static void set_tool_with_focus(ToolMode tool, BOOL focus_editor) {
-    BOOL preview_available = g_preview_mode && selected_capture_window();
-    BOOL resource_available = g_resource_visible &&
+    BOOL preview_available = g.preview_mode && selected_capture_window();
+    BOOL resource_available = g.resource_visible &&
                               selected_active_resource_node() != NULL;
     if (!preview_available && !resource_available) {
         update_tool_availability();
         return;
     }
-    if (g_preview_mode && tool != TOOL_SELECT) return;
-    if (tool == TOOL_CLICK && (g_preview_mode || g_selected < 0 ||
-                               g_selected >= g_annotation_count)) {
+    if (g.preview_mode && tool != TOOL_SELECT) return;
+    if (tool == TOOL_CLICK && (g.preview_mode || g.selected < 0 ||
+                               g.selected >= g.annotation_count)) {
         MessageBeep(MB_ICONWARNING);
         return;
     }
-    g_tool = tool;
+    g.tool = tool;
     update_tool_availability();
-    if (focus_editor) SetFocus(g_editor);
+    if (focus_editor) SetFocus(g.editor);
 }
 
 static void set_tool(ToolMode tool) {
@@ -1786,30 +1840,30 @@ static void set_tool(ToolMode tool) {
 }
 
 static void update_tool_availability(void) {
-    if (!g_tool_buttons[0]) return;
+    if (!g.tool_buttons[0]) return;
     BOOL window_selected = selected_capture_window() != NULL;
-    BOOL resource_selected = g_resource_visible &&
+    BOOL resource_selected = g.resource_visible &&
                              selected_active_resource_node() != NULL;
-    BOOL preview_available = g_preview_mode && window_selected;
-    BOOL click_available = resource_selected && !g_preview_mode && g_selected >= 0 &&
-                           g_selected < g_annotation_count;
-    if (preview_available) g_tool = TOOL_SELECT;
-    else if (!click_available && g_tool == TOOL_CLICK) g_tool = TOOL_SELECT;
+    BOOL preview_available = g.preview_mode && window_selected;
+    BOOL click_available = resource_selected && !g.preview_mode && g.selected >= 0 &&
+                           g.selected < g.annotation_count;
+    if (preview_available) g.tool = TOOL_SELECT;
+    else if (!click_available && g.tool == TOOL_CLICK) g.tool = TOOL_SELECT;
     for (int i = 0; i < GOLDEN_TOOL_BUTTON_COUNT; ++i) {
         BOOL available = preview_available ? i == TOOL_SELECT :
                          resource_selected && (i != TOOL_CLICK || click_available);
-        EnableWindow(g_tool_buttons[i], available);
-        InvalidateRect(g_tool_buttons[i], NULL, FALSE);
+        EnableWindow(g.tool_buttons[i], available);
+        InvalidateRect(g.tool_buttons[i], NULL, FALSE);
     }
 }
 
 static void zoom_by(double factor, const POINT *anchor) {
     if (!active_pixels() || !active_width() || !active_height()) return;
     RECT client;
-    GetClientRect(g_editor, &client);
+    GetClientRect(g.editor, &client);
     GoldenViewport current = golden_compute_viewport(
         (int)active_width(), (int)active_height(), client.right, client.bottom,
-        30, g_zoom, g_pan_x, g_pan_y);
+        30, g.zoom, g.pan_x, g.pan_y);
     double next_zoom = min(8.0, max(0.05, current.scale * factor));
     if (next_zoom == current.scale) return;
     POINT zoom_anchor = anchor ? *anchor : (POINT){
@@ -1820,32 +1874,32 @@ static void zoom_by(double factor, const POINT *anchor) {
         (int)active_width(), (int)active_height(), client.right, client.bottom,
         30, next_zoom, 0, 0);
     POINT pan = golden_zoom_anchor_pan(&current, &centered_zoom, zoom_anchor);
-    g_zoom = next_zoom;
-    g_pan_x = pan.x;
-    g_pan_y = pan.y;
-    InvalidateRect(g_editor, NULL, FALSE);
+    g.zoom = next_zoom;
+    g.pan_x = pan.x;
+    g.pan_y = pan.y;
+    InvalidateRect(g.editor, NULL, FALSE);
 }
 
 static void handle_command(int id) {
     switch (id) {
     case ID_OPEN: open_folder(); break;
     case ID_SAVE: save_annotations(); break;
-    case ID_EXIT: SendMessageW(g_main, WM_CLOSE, 0, 0); break;
+    case ID_EXIT: SendMessageW(g.main, WM_CLOSE, 0, 0); break;
     case ID_UNDO: undo_action(); break;
     case ID_REDO: redo_action(); break;
     case ID_RENAME: {
         HWND focus = GetFocus();
-        HTREEITEM selected = TreeView_GetSelection(g_tree);
-        if ((focus == g_tree || IsChild(g_tree, focus)) && begin_tree_rename(selected)) break;
+        HTREEITEM selected = TreeView_GetSelection(g.tree);
+        if ((focus == g.tree || IsChild(g.tree, focus)) && begin_tree_rename(selected)) break;
         rename_selected();
         break;
     }
     case ID_DELETE: delete_selected(); break;
     case ID_CLEAR_CLICK: clear_click(); break;
-    case ID_FIT: g_zoom = 0.0; g_pan_x = g_pan_y = 0; InvalidateRect(g_editor, NULL, FALSE); break;
+    case ID_FIT: g.zoom = 0.0; g.pan_x = g.pan_y = 0; InvalidateRect(g.editor, NULL, FALSE); break;
     case ID_ZOOM_OUT: zoom_by(0.8, NULL); break;
     case ID_ZOOM_IN: zoom_by(1.25, NULL); break;
-    case ID_ACTUAL: g_zoom = 1.0; g_pan_x = g_pan_y = 0; InvalidateRect(g_editor, NULL, FALSE); break;
+    case ID_ACTUAL: g.zoom = 1.0; g.pan_x = g.pan_y = 0; InvalidateRect(g.editor, NULL, FALSE); break;
     case ID_CAPTURE: capture_new(); break;
     case ID_RECAPTURE: recapture_current(); break;
     case ID_REFRESH: {
@@ -1883,7 +1937,7 @@ static HMENU create_main_menu(void) {
     AppendMenuW(view, MF_STRING, ID_REFRESH, L"Rescan Resource Folder\tF5");
     AppendMenuW(capture, MF_STRING, ID_CAPTURE, L"New Capture…");
     AppendMenuW(capture, MF_STRING, ID_RECAPTURE, L"Recapture Current Resource");
-    g_capture_menu = capture;
+    g.capture_menu = capture;
     AppendMenuW(bar, MF_POPUP, (UINT_PTR)file, L"File");
     AppendMenuW(bar, MF_POPUP, (UINT_PTR)edit, L"Edit");
     AppendMenuW(bar, MF_POPUP, (UINT_PTR)view, L"View");
@@ -1893,34 +1947,36 @@ static HMENU create_main_menu(void) {
 
 static void activate_resource_node(ResourceTreeNode *node) {
     if (node && node->kind == RESOURCE_DIRECTORY && node->path) {
-        wcsncpy(g_current_dir, node->path, _countof(g_current_dir) - 1);
-        g_current_dir[_countof(g_current_dir) - 1] = 0;
+        if (!golden_path_copy(node->path, g.current_dir,
+                              _countof(g.current_dir))) return;
         update_status();
     } else if (node && node->kind == RESOURCE_PNG && node->path) {
-        if (!_wcsicmp(node->path, g_image_path)) {
-            g_resource_visible = TRUE;
+        if (!_wcsicmp(node->path, g.image_path)) {
+            g.resource_visible = TRUE;
             clear_preview();
-            g_selected = -1;
+            g.selected = -1;
             update_tool_availability();
             update_context_label();
-            InvalidateRect(g_editor, NULL, FALSE);
-        } else load_resource(node->path);
+            InvalidateRect(g.editor, NULL, FALSE);
+        } else if (!load_resource(node->path)) {
+            sync_tree_annotation_selection();
+        }
     } else if (node && node->kind == RESOURCE_ANNOTATION &&
                node->annotation_index >= 0 &&
-               node->annotation_index < g_annotation_count) {
-        g_resource_visible = TRUE;
+               node->annotation_index < g.annotation_count) {
+        g.resource_visible = TRUE;
         clear_preview();
-        g_selected = node->annotation_index;
+        g.selected = node->annotation_index;
         set_tool_with_focus(TOOL_SELECT, FALSE);
-        InvalidateRect(g_editor, NULL, FALSE);
+        InvalidateRect(g.editor, NULL, FALSE);
     }
 }
 
 static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
     case WM_CREATE: {
-        g_main = hwnd;
-        if (!golden_preview_service_init(&g_preview_service, hwnd,
+        g.main = hwnd;
+        if (!golden_preview_service_init(&g.preview_service, hwnd,
                 WM_PREVIEW_READY, capture_preview_frame, NULL)) {
             MessageBoxW(hwnd,
                 L"Goldens could not start its window preview service.\n\n"
@@ -1929,9 +1985,9 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return -1;
         }
         SetMenu(hwnd, create_main_menu());
-        g_context_label = CreateWindowW(L"STATIC", L"  No resource selected", WS_CHILD | WS_VISIBLE |
+        g.context_label = CreateWindowW(L"STATIC", L"  No resource selected", WS_CHILD | WS_VISIBLE |
             SS_LEFT | SS_CENTERIMAGE | SS_ENDELLIPSIS | SS_NOPREFIX,
-            0, 0, 0, 0, hwnd, NULL, g_instance, NULL);
+            0, 0, 0, 0, hwnd, NULL, g.instance, NULL);
 
         const wchar_t *tool_labels[] = {L"Select", L"Rectangle", L"Click"};
         const wchar_t *tool_tips[] = {L"Select, move, resize, or pan",
@@ -1940,81 +1996,81 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         for (int i = 0; i < GOLDEN_TOOL_BUTTON_COUNT; ++i) {
             DWORD style = WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW;
             if (!i) style |= WS_GROUP;
-            g_tool_buttons[i] = CreateWindowW(L"BUTTON", tool_labels[i], style,
-                0, 0, 0, 0, hwnd, (HMENU)(INT_PTR)tool_ids[i], g_instance, NULL);
-            if (g_tool_buttons[i])
-                SetWindowSubclass(g_tool_buttons[i], ToolButtonProc,
+            g.tool_buttons[i] = CreateWindowW(L"BUTTON", tool_labels[i], style,
+                0, 0, 0, 0, hwnd, (HMENU)(INT_PTR)tool_ids[i], g.instance, NULL);
+            if (g.tool_buttons[i])
+                SetWindowSubclass(g.tool_buttons[i], ToolButtonProc,
                                   (UINT_PTR)(i + 1), (DWORD_PTR)i);
         }
-        g_tool_tooltip = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, NULL,
+        g.tool_tooltip = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, NULL,
             WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
             CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
-            hwnd, NULL, g_instance, NULL);
-        if (g_tool_tooltip) {
-            SetWindowPos(g_tool_tooltip, HWND_TOPMOST, 0, 0, 0, 0,
+            hwnd, NULL, g.instance, NULL);
+        if (g.tool_tooltip) {
+            SetWindowPos(g.tool_tooltip, HWND_TOPMOST, 0, 0, 0, 0,
                          SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-            SendMessageW(g_tool_tooltip, TTM_SETDELAYTIME, TTDT_INITIAL, 450);
+            SendMessageW(g.tool_tooltip, TTM_SETDELAYTIME, TTDT_INITIAL, 450);
             for (int i = 0; i < GOLDEN_TOOL_BUTTON_COUNT; ++i) {
-                TOOLINFOW *tool = &g_tool_button_tooltips[i];
+                TOOLINFOW *tool = &g.tool_button_tooltips[i];
                 ZeroMemory(tool, sizeof(*tool));
                 tool->cbSize = TTTOOLINFO_V1_SIZE;
                 tool->uFlags = TTF_IDISHWND | TTF_SUBCLASS;
                 tool->hwnd = hwnd;
-                tool->uId = (UINT_PTR)g_tool_buttons[i];
-                tool->hinst = g_instance;
+                tool->uId = (UINT_PTR)g.tool_buttons[i];
+                tool->hinst = g.instance;
                 tool->lpszText = (wchar_t *)tool_tips[i];
-                SendMessageW(g_tool_tooltip, TTM_ADDTOOLW, 0, (LPARAM)tool);
+                SendMessageW(g.tool_tooltip, TTM_ADDTOOLW, 0, (LPARAM)tool);
             }
         }
         const wchar_t *view_labels[] = {L"Fit", L"−", L"+"};
         const int view_ids[] = {ID_FIT, ID_ZOOM_OUT, ID_ZOOM_IN};
         for (int i = 0; i < GOLDEN_VIEW_BUTTON_COUNT; ++i)
-            g_view_buttons[i] = CreateWindowW(L"BUTTON", view_labels[i],
+            g.view_buttons[i] = CreateWindowW(L"BUTTON", view_labels[i],
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd,
-                (HMENU)(INT_PTR)view_ids[i], g_instance, NULL);
+                (HMENU)(INT_PTR)view_ids[i], g.instance, NULL);
         const wchar_t *window_labels[] = {L"Capture", L"Recapture"};
         const int window_ids[] = {ID_CAPTURE, ID_RECAPTURE};
         for (int i = 0; i < 2; ++i)
-            g_window_buttons[i] = CreateWindowW(L"BUTTON", window_labels[i],
+            g.window_buttons[i] = CreateWindowW(L"BUTTON", window_labels[i],
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd,
-                (HMENU)(INT_PTR)window_ids[i], g_instance, NULL);
-        g_tree = CreateWindowExW(WS_EX_CLIENTEDGE, WC_TREEVIEWW, NULL,
+                (HMENU)(INT_PTR)window_ids[i], g.instance, NULL);
+        g.tree = CreateWindowExW(WS_EX_CLIENTEDGE, WC_TREEVIEWW, NULL,
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | TVS_HASBUTTONS | TVS_HASLINES |
             TVS_LINESATROOT | TVS_SHOWSELALWAYS | TVS_EDITLABELS, 0, 0, 0, 0, hwnd,
-            (HMENU)ID_TREE, g_instance, NULL);
-        g_editor = CreateWindowExW(WS_EX_CLIENTEDGE, L"GoldensEditor", NULL,
+            (HMENU)ID_TREE, g.instance, NULL);
+        g.editor = CreateWindowExW(WS_EX_CLIENTEDGE, L"GoldensEditor", NULL,
             WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd,
-            (HMENU)ID_EDITOR, g_instance, NULL);
-        g_editor_tooltip = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, NULL,
+            (HMENU)ID_EDITOR, g.instance, NULL);
+        g.editor_tooltip = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, NULL,
             WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX | TTS_NOANIMATE | TTS_NOFADE,
             CW_USEDEFAULT, CW_USEDEFAULT,
-            CW_USEDEFAULT, CW_USEDEFAULT, hwnd, NULL, g_instance, NULL);
-        if (g_editor_tooltip) {
-            SetWindowPos(g_editor_tooltip, HWND_TOPMOST, 0, 0, 0, 0,
+            CW_USEDEFAULT, CW_USEDEFAULT, hwnd, NULL, g.instance, NULL);
+        if (g.editor_tooltip) {
+            SetWindowPos(g.editor_tooltip, HWND_TOPMOST, 0, 0, 0, 0,
                          SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-            SendMessageW(g_editor_tooltip, TTM_SETMAXTIPWIDTH, 0,
+            SendMessageW(g.editor_tooltip, TTM_SETMAXTIPWIDTH, 0,
                          golden_scale_ui(360, GetDpiForWindow(hwnd)));
-            if (!golden_tooltip_register_tracking(g_editor_tooltip, g_editor,
-                    g_instance, g_tooltip_text, &g_editor_tooltip_tool)) {
-                DestroyWindow(g_editor_tooltip);
-                g_editor_tooltip = NULL;
+            if (!golden_tooltip_register_tracking(g.editor_tooltip, g.editor,
+                    g.instance, g.tooltip_text, &g.editor_tooltip_tool)) {
+                DestroyWindow(g.editor_tooltip);
+                g.editor_tooltip = NULL;
             }
         }
-        g_windows = CreateWindowExW(WS_EX_CLIENTEDGE, WC_TREEVIEWW, NULL,
+        g.windows = CreateWindowExW(WS_EX_CLIENTEDGE, WC_TREEVIEWW, NULL,
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | TVS_HASBUTTONS | TVS_HASLINES |
             TVS_LINESATROOT | TVS_SHOWSELALWAYS, 0, 0, 0, 0, hwnd,
-            (HMENU)ID_WINDOWS, g_instance, NULL);
-        g_status = CreateWindowW(L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_LEFT | SS_CENTERIMAGE,
-            0, 0, 0, 0, hwnd, NULL, g_instance, NULL);
-        g_left_splitter = CreateWindowW(L"GoldensSplitter", NULL,
+            (HMENU)ID_WINDOWS, g.instance, NULL);
+        g.status = CreateWindowW(L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_LEFT | SS_CENTERIMAGE,
+            0, 0, 0, 0, hwnd, NULL, g.instance, NULL);
+        g.left_splitter = CreateWindowW(L"GoldensSplitter", NULL,
             WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd,
-            (HMENU)ID_SPLITTER_LEFT, g_instance, NULL);
-        g_right_splitter = CreateWindowW(L"GoldensSplitter", NULL,
+            (HMENU)ID_SPLITTER_LEFT, g.instance, NULL);
+        g.right_splitter = CreateWindowW(L"GoldensSplitter", NULL,
             WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd,
-            (HMENU)ID_SPLITTER_RIGHT, g_instance, NULL);
+            (HMENU)ID_SPLITTER_RIGHT, g.instance, NULL);
         set_tool(TOOL_SELECT);
         update_context_label();
-        if (g_root[0]) {
+        if (g.root[0]) {
             refresh_resources();
         }
         update_status();
@@ -2039,7 +2095,7 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     }
     case WM_TIMER:
-        if (wp == WINDOW_TIMER && !g_panning) {
+        if (wp == WINDOW_TIMER && !g.panning) {
             refresh_windows();
             refresh_preview_metadata();
         }
@@ -2057,10 +2113,10 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         break;
     }
     case WM_CTLCOLORSTATIC:
-        if ((HWND)lp == g_context_label) {
+        if ((HWND)lp == g.context_label) {
             SetBkMode((HDC)wp, TRANSPARENT);
-            SetTextColor((HDC)wp, g_preview_mode ? RGB(190, 90, 0) :
-                         g_resource_visible && g_image_path[0] ? RGB(0, 105, 145) :
+            SetTextColor((HDC)wp, g.preview_mode ? RGB(190, 90, 0) :
+                         g.resource_visible && g.image_path[0] ? RGB(0, 105, 145) :
                          GetSysColor(COLOR_BTNTEXT));
             return (LRESULT)GetSysColorBrush(COLOR_BTNFACE);
         }
@@ -2068,29 +2124,29 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_PREVIEW_READY: {
         GoldenImage image = {0};
         GoldenPreviewCompletion completion = golden_preview_service_complete(
-            &g_preview_service, g_preview_target, g_preview_generation, &image);
+            &g.preview_service, g.preview_target, g.preview_generation, &image);
         if (completion == GOLDEN_PREVIEW_COMPLETION_ACCEPTED ||
             completion == GOLDEN_PREVIEW_COMPLETION_FAILED) {
-            g_preview_image = image;
+            g.preview_image = image;
             if (completion == GOLDEN_PREVIEW_COMPLETION_ACCEPTED)
-                ++g_image_revision;
-            g_preview_loading = FALSE;
-            InvalidateRect(g_editor, NULL, FALSE);
+                ++g.image_revision;
+            g.preview_loading = FALSE;
+            InvalidateRect(g.editor, NULL, FALSE);
         }
         return 0;
     }
     case WM_RESOURCE_RENAMED: {
         refresh_resources();
-        if (g_pending_resource_selection[0]) {
-            HTREEITEM item = find_resource_item(TreeView_GetRoot(g_tree),
-                                                g_pending_resource_selection);
-            g_rebuilding_resources = TRUE;
+        if (g.pending_resource_selection[0]) {
+            HTREEITEM item = find_resource_item(TreeView_GetRoot(g.tree),
+                                                g.pending_resource_selection);
+            g.rebuilding_resources = TRUE;
             if (item) {
-                TreeView_EnsureVisible(g_tree, item);
-                TreeView_SelectItem(g_tree, item);
+                TreeView_EnsureVisible(g.tree, item);
+                TreeView_SelectItem(g.tree, item);
             }
-            g_rebuilding_resources = FALSE;
-            g_pending_resource_selection[0] = 0;
+            g.rebuilding_resources = FALSE;
+            g.pending_resource_selection[0] = 0;
         }
         update_capture_availability();
         update_tool_availability();
@@ -2117,7 +2173,7 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (node->kind == RESOURCE_PNG && node->path)
                 return rename_resource_file(node->path, edit->item.pszText);
             if (node->kind == RESOURCE_ANNOTATION &&
-                node->annotation_index >= 0 && node->annotation_index < g_annotation_count) {
+                node->annotation_index >= 0 && node->annotation_index < g.annotation_count) {
                 wchar_t name[128];
                 wcsncpy(name, edit->item.pszText, _countof(name) - 1);
                 name[_countof(name) - 1] = 0;
@@ -2127,51 +2183,51 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     show_error(L"That annotation name is already used in this image.");
                     return FALSE;
                 }
-                if (wcscmp(name, g_annotations[node->annotation_index].name)) {
-                    g_selected = node->annotation_index;
+                if (wcscmp(name, g.annotations[node->annotation_index].name)) {
+                    g.selected = node->annotation_index;
                     push_undo();
-                    wcscpy(g_annotations[node->annotation_index].name, name);
-                    g_dirty = TRUE;
+                    wcscpy(g.annotations[node->annotation_index].name, name);
+                    g.dirty = TRUE;
                     update_tool_availability();
-                    InvalidateRect(g_editor, NULL, FALSE);
-                    PostMessageW(g_main, WM_ANNOTATION_RENAMED, 0, 0);
+                    InvalidateRect(g.editor, NULL, FALSE);
+                    PostMessageW(g.main, WM_ANNOTATION_RENAMED, 0, 0);
                 }
                 return TRUE;
             }
             return FALSE;
         }
         if (header->idFrom == ID_TREE && header->code == TVN_SELCHANGEDW &&
-            !g_rebuilding_resources) {
+            !g.rebuilding_resources) {
             NMTREEVIEWW *change = (NMTREEVIEWW *)lp;
             ResourceTreeNode *node = (ResourceTreeNode *)change->itemNew.lParam;
             if (node) activate_resource_node(node);
             else {
-                BOOL was_showing_resource = !g_preview_mode && g_resource_visible;
-                g_resource_visible = FALSE;
-                g_selected = -1;
+                BOOL was_showing_resource = !g.preview_mode && g.resource_visible;
+                g.resource_visible = FALSE;
+                g.selected = -1;
                 update_tool_availability();
                 if (was_showing_resource) {
                     HWND target = selected_capture_window();
                     if (target) preview_window(target);
                     else {
                         update_context_label();
-                        InvalidateRect(g_editor, NULL, FALSE);
+                        InvalidateRect(g.editor, NULL, FALSE);
                     }
                 }
             }
             update_capture_availability();
             update_tool_availability();
         }
-        if (header->idFrom == ID_WINDOWS && header->code == TVN_SELCHANGEDW && !g_rebuilding_windows) {
+        if (header->idFrom == ID_WINDOWS && header->code == TVN_SELCHANGEDW && !g.rebuilding_windows) {
             HWND target = selected_capture_window();
             if (target) preview_window(target);
-            else if (g_preview_mode) {
+            else if (g.preview_mode) {
                 ResourceTreeNode *resource = selected_active_resource_node();
                 if (resource) activate_resource_node(resource);
                 else {
-                    g_resource_visible = FALSE;
+                    g.resource_visible = FALSE;
                     clear_preview();
-                    InvalidateRect(g_editor, NULL, FALSE);
+                    InvalidateRect(g.editor, NULL, FALSE);
                 }
             }
             update_capture_availability();
@@ -2179,15 +2235,15 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         if (header->idFrom == ID_WINDOWS && header->code == NM_CLICK) {
             HWND target = clicked_capture_window();
-            if (target && (!g_preview_mode || target != g_preview_target))
+            if (target && (!g.preview_mode || target != g.preview_target))
                 preview_window(target);
         }
         if (header->idFrom == ID_TREE && header->code == NM_CLICK) {
             ResourceTreeNode *node = clicked_resource_node();
             BOOL current_png = node && node->kind == RESOURCE_PNG && node->path &&
-                               !_wcsicmp(node->path, g_image_path);
+                               !_wcsicmp(node->path, g.image_path);
             BOOL current_annotation = node && node->kind == RESOURCE_ANNOTATION &&
-                node->annotation_index >= 0 && node->annotation_index < g_annotation_count;
+                node->annotation_index >= 0 && node->annotation_index < g.annotation_count;
             if (current_png || current_annotation) activate_resource_node(node);
         }
         if (header->code == NM_CLICK &&
@@ -2197,10 +2253,10 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             DWORD position = GetMessagePos();
             TVHITTESTINFO hit = {0};
             hit.pt = (POINT){GET_X_LPARAM(position), GET_Y_LPARAM(position)};
-            ScreenToClient(g_tree, &hit.pt);
-            TreeView_HitTest(g_tree, &hit);
+            ScreenToClient(g.tree, &hit.pt);
+            TreeView_HitTest(g.tree, &hit);
             if (hit.hItem && (hit.flags & TVHT_ONITEMLABEL))
-                PostMessageW(g_main, WM_BEGIN_TREE_RENAME, 0, (LPARAM)hit.hItem);
+                PostMessageW(g.main, WM_BEGIN_TREE_RENAME, 0, (LPARAM)hit.hItem);
         }
         return 0;
     }
@@ -2210,17 +2266,17 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_DESTROY:
         KillTimer(hwnd, WINDOW_TIMER);
         KillTimer(hwnd, PREVIEW_TIMER);
-        if (g_editor_tooltip) {
-            DestroyWindow(g_editor_tooltip);
-            g_editor_tooltip = NULL;
+        if (g.editor_tooltip) {
+            DestroyWindow(g.editor_tooltip);
+            g.editor_tooltip = NULL;
         }
-        if (g_tool_tooltip) {
-            DestroyWindow(g_tool_tooltip);
-            g_tool_tooltip = NULL;
+        if (g.tool_tooltip) {
+            DestroyWindow(g.tool_tooltip);
+            g.tool_tooltip = NULL;
         }
-        free_tree_item(g_tree, TreeView_GetRoot(g_tree));
+        free_tree_item(g.tree, TreeView_GetRoot(g.tree));
         clear_preview();
-        golden_preview_service_shutdown(&g_preview_service, 2000);
+        golden_preview_service_shutdown(&g.preview_service, 2000);
         clear_image();
         PostQuitMessage(0);
         return 0;
@@ -2229,12 +2285,12 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 }
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR command_line, int show) {
-    g_instance = instance;
+    initialize_app_state(instance);
     initialize_startup_root();
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     if (FAILED(CoInitializeEx(NULL, COINIT_APARTMENTTHREADED))) return 1;
     if (FAILED(CoCreateInstance(&CLSID_WICImagingFactory, NULL, CLSCTX_INPROC_SERVER,
-                                &IID_IWICImagingFactory, (void **)&g_wic))) {
+                                &IID_IWICImagingFactory, (void **)&g.wic))) {
         CoUninitialize();
         return 1;
     }
@@ -2264,16 +2320,16 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR command_line, 
     splitter_class.hCursor = LoadCursorW(NULL, IDC_SIZEWE);
     splitter_class.lpszClassName = L"GoldensSplitter";
     RegisterClassW(&splitter_class);
-    g_main = CreateWindowExW(0, L"GoldensMain", APP_NAME,
+    g.main = CreateWindowExW(0, L"GoldensMain", APP_NAME,
         WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT,
         1280, 800, NULL, NULL, instance, NULL);
-    if (!g_main) {
-        IWICImagingFactory_Release(g_wic);
+    if (!g.main) {
+        IWICImagingFactory_Release(g.wic);
         CoUninitialize();
         return 1;
     }
-    ShowWindow(g_main, show);
-    UpdateWindow(g_main);
+    ShowWindow(g.main, show);
+    UpdateWindow(g.main);
     ACCEL shortcuts[] = {
         {FVIRTKEY | FCONTROL, 'O', ID_OPEN}, {FVIRTKEY | FCONTROL, 'S', ID_SAVE},
         {FVIRTKEY | FCONTROL, 'Z', ID_UNDO}, {FVIRTKEY | FCONTROL, 'Y', ID_REDO},
@@ -2287,13 +2343,13 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR command_line, 
     HACCEL accelerators = CreateAcceleratorTableW(shortcuts, _countof(shortcuts));
     MSG msg;
     while (GetMessageW(&msg, NULL, 0, 0) > 0) {
-        if (!TranslateAcceleratorW(g_main, accelerators, &msg)) {
+        if (!TranslateAcceleratorW(g.main, accelerators, &msg)) {
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
     }
     DestroyAcceleratorTable(accelerators);
-    IWICImagingFactory_Release(g_wic);
+    IWICImagingFactory_Release(g.wic);
     CoUninitialize();
     return (int)msg.wParam;
 }
