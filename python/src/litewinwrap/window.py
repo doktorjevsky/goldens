@@ -256,6 +256,7 @@ class Window:
         threshold: float = 0.90,
         timeout: float = 0.0,
         overlap: float = 0.30,
+        retry_on_ambiguity: bool = False,
     ) -> Match:
         from . import match as image_match
 
@@ -265,6 +266,7 @@ class Window:
             threshold=threshold,
             timeout=timeout,
             overlap=overlap,
+            retry_on_ambiguity=retry_on_ambiguity,
         )
 
     def find_best_target(
@@ -292,6 +294,7 @@ class Window:
         threshold: float = 0.90,
         timeout: float = 0.0,
         overlap: float = 0.30,
+        retry_on_ambiguity: bool = False,
         button: Button = "left",
     ) -> Match:
         from . import match as image_match
@@ -302,6 +305,7 @@ class Window:
             threshold=threshold,
             timeout=timeout,
             overlap=overlap,
+            retry_on_ambiguity=retry_on_ambiguity,
             button=button,
         )
 

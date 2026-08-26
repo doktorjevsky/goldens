@@ -56,6 +56,19 @@ ambiguity if the target occurs more than once. Use `find_targets()` when every
 occurrence is wanted. Choosing the highest-scoring occurrence is deliberately
 explicit through `find_best_target()` or `click_best_target()`.
 
+For transient ambiguity caused by animations or other changing UI, pass
+`retry_on_ambiguity=True` together with a timeout. The operation then keeps
+capturing until exactly one match remains. If the last capture is still
+ambiguous at the deadline, it raises `TargetAmbiguousError` with those matches:
+
+```python
+window.click_target(
+    targets["button_8"],
+    timeout=2.0,
+    retry_on_ambiguity=True,
+)
+```
+
 The equivalent operations on an existing capture are `match.match()`,
 `match.match_all()`, and `match.best_match()`.
 
