@@ -10,10 +10,25 @@ if command -v cmd.exe >/dev/null 2>&1; then
     exec cmd.exe /d /c test.bat
 fi
 
-if command -v ssh >/dev/null 2>&1; then
-    echo "Running the Goldens Windows suite on win-vm..."
-    exec ssh win-vm 'powershell -NoProfile -Command "Set-Location $HOME\dev\goldens; .\test.bat; exit $LASTEXITCODE"'
+runner=${GOLDENS_WINDOWS_TEST_RUNNER:-}
+if [ -z "$runner" ]; then
+    if configured_runner=$(git config --local --get goldens.windowsTestRunner); then
+        runner=$configured_runner
+    fi
 fi
 
-echo "Goldens tests require Windows or an SSH host named win-vm." >&2
+if [ -n "$runner" ]; then
+    case "$runner" in
+        /*) ;;
+        *) runner="$repo_root/$runner" ;;
+    esac
+    if [ ! -x "$runner" ]; then
+        echo "Configured Goldens Windows test runner is not executable: $runner" >&2
+        exit 1
+    fi
+    exec "$runner" "$repo_root"
+fi
+
+echo "Goldens tests require Windows or a locally configured Windows test runner." >&2
+echo "Set GOLDENS_WINDOWS_TEST_RUNNER or git config --local goldens.windowsTestRunner." >&2
 exit 1
