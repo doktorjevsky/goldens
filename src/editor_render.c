@@ -125,6 +125,32 @@ void golden_draw_boundary(HDC dc, const RECT *boundary, COLORREF color,
     DeleteObject(pen);
 }
 
+static void draw_click_cross(HDC dc, POINT center) {
+    MoveToEx(dc, center.x - 6, center.y, NULL);
+    LineTo(dc, center.x + 7, center.y);
+    MoveToEx(dc, center.x, center.y - 6, NULL);
+    LineTo(dc, center.x, center.y + 7);
+}
+
+void golden_draw_click_mark(HDC dc, POINT center) {
+    if (!dc) return;
+    HPEN outline = CreatePen(PS_SOLID, 3, RGB(255, 255, 255));
+    HPEN foreground = CreatePen(PS_SOLID, 1, RGB(0, 0, 0));
+    if (!outline || !foreground) {
+        if (outline) DeleteObject(outline);
+        if (foreground) DeleteObject(foreground);
+        return;
+    }
+
+    HGDIOBJ old_pen = SelectObject(dc, outline);
+    draw_click_cross(dc, center);
+    SelectObject(dc, foreground);
+    draw_click_cross(dc, center);
+    SelectObject(dc, old_pen);
+    DeleteObject(foreground);
+    DeleteObject(outline);
+}
+
 void golden_fill_tinted_rect(HDC dc, const RECT *boundary, COLORREF color,
                              BYTE opacity) {
     int width = boundary ? boundary->right - boundary->left : 0;
