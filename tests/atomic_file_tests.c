@@ -141,6 +141,21 @@ static void test_writer_uses_destination_directory(const wchar_t *directory) {
     DeleteFileW(path);
 }
 
+static void test_atomic_file_copy(const wchar_t *directory) {
+    wchar_t source[MAX_PATH], destination[MAX_PATH];
+    _snwprintf(source, _countof(source), L"%s\\copy-source.png", directory);
+    _snwprintf(destination, _countof(destination),
+               L"%s\\copy-destination.png", directory);
+    CHECK(write_bytes_direct(source, "old-version", 11));
+    CHECK(write_bytes_direct(destination, "replace-me", 10));
+    CHECK(golden_atomic_copy_file(source, destination));
+    check_contents(destination, "old-version");
+    CHECK(!golden_atomic_copy_file(L"missing-source", destination));
+    check_contents(destination, "old-version");
+    DeleteFileW(source);
+    DeleteFileW(destination);
+}
+
 int main(void) {
     wchar_t directory[MAX_PATH] = L"";
     make_test_directory(directory, _countof(directory));
@@ -149,6 +164,7 @@ int main(void) {
     test_missing_output_preserves_destination(directory);
     test_failed_new_file_leaves_no_artifact(directory);
     test_writer_uses_destination_directory(directory);
+    test_atomic_file_copy(directory);
     CHECK(!golden_atomic_replace_file(NULL, controlled_writer, NULL));
     CHECK(!golden_atomic_replace_file(L"x", NULL, NULL));
     CHECK(!golden_atomic_write_bytes(NULL, "x", 1));

@@ -13,7 +13,7 @@ set "WARNINGS=-Wall -Wextra -Wconversion -Wsign-conversion -Wformat=2 -Wshadow -
 
 %CC% -std=c17 -O2 %WARNINGS% ^
   -DUNICODE -D_UNICODE -DWIN32_LEAN_AND_MEAN -DCOBJMACROS -D_WIN32_WINNT=0x0A00 -DWINVER=0x0A00 ^
-  -municode -mwindows src\goldens.c src\model.c src\document.c src\window_tracker.c src\image_io.c src\preview_capture.c src\preview_service.c src\editor_render.c src\ui_layout.c src\ui_tooltip.c src\ui_tool_icon.c src\resource_ops.c src\atomic_file.c -o %OUTPUT% ^
+  -municode -mwindows src\goldens.c src\model.c src\document.c src\window_tracker.c src\image_io.c src\preview_capture.c src\preview_service.c src\editor_render.c src\ui_layout.c src\ui_tooltip.c src\ui_tool_icon.c src\resource_ops.c src\atomic_file.c src\history.c -o %OUTPUT% ^
   -lcomctl32 -lole32 -luuid -lwindowscodecs -lshell32 -lshlwapi ^
   -ldwmapi -lgdi32 -lmsimg32 -luser32 -ladvapi32
 

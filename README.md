@@ -58,13 +58,29 @@ destination to the corresponding directory.
   disabled until an annotation is selected and only accepts points inside it.
   While drawing, a high-opacity orange tint and thick yellow outline keep the
   new boundary visible over both dark and light images.
-  Click assigns a normalized click point to the annotation under the cursor.
+  Click assigns or repositions a normalized click point in the selected
+  annotation. Once a point exists and Click is still active, its target icon
+  changes to a target-with-X; clicking the tool button again clears the point
+  while leaving Click active so a replacement can be placed immediately.
   Middle-drag also pans from any tool.
 - The resource tree expands the active PNG to show its annotations. Selection
   stays synchronized in both directions between the tree and editor. Boundary
   names appear as hover tooltips instead of labels over the image. Double-click
   a PNG or annotation name to rename it in place; Enter commits and Escape
-  cancels. Resource renames move the PNG and JSON sidecar as one transaction.
+  cancels. Use **File → New Folder…** or **Ctrl+N** to create a folder beneath
+  the selected resource directory. F2 also renames non-root folders. Drag PNGs
+  and folders onto a directory to move them within the open resource root;
+  annotation rows cannot be dragged. PNG moves keep the same-stem JSON sidecar
+  attached. A persistent transaction journal completes or rolls back an
+  interrupted pair move on refresh or next startup, including the case where
+  Windows could not perform the immediate PNG rollback. Moves never
+  merge folders or overwrite an existing PNG, folder, or JSON sidecar. Folder
+  creation, capture/recapture, and PNG/folder moves or renames join annotation edits in the ordered
+  **Ctrl+Z**/**Ctrl+Y** undo history. An undo blocked by an externally created
+  collision or a now-nonempty folder remains retryable after the conflict is fixed.
+  The history retains the latest 32 actions. Annotation snapshots allocate only
+  the entries that need them, and recoverable capture versions are deleted when
+  their entry is evicted, replaced by a new branch, or the application exits.
   Clicking blank space in either tree deselects that source. Deselecting an
   annotation first returns selection to its parent PNG. If a displayed PNG or
   window is deselected, the editor falls back to the source selected in the
@@ -72,7 +88,11 @@ destination to the corresponding directory.
 - Changes are written only by **File → Save Annotations**. JSON and captured
   PNG files are replaced atomically, so an interrupted or failed write leaves
   the last valid file in place. Switching images or exiting prompts if there
-  are unsaved changes.
+  are unsaved changes. Save is grayed while annotations are up to date. Menu
+  commands are refreshed whenever a menu opens: Undo/Redo, annotation
+  rename/delete/click clearing, image view controls, resource refresh and
+  folder/capture operations are grayed whenever their required selection or
+  resource is unavailable.
 - Select a window in the right column to start a continuously refreshed,
   asynchronous bitmap preview in the center, then use **Capture** or
   **Recapture** beside the window list. Preview mode uses **Select** for panning and
@@ -114,7 +134,11 @@ live top-level window lifecycle reconciliation (including minimized windows),
 exact 1:1 GDI rendering, overlay ordering, custom and collapsed column layouts
 from compact to wide and 100–200% DPI, version-compatible native tooltip
 registration and positioning, DPI-scaled tool icon rasterization, transactional
-PNG/JSON renames including rollback failure, atomic-write failure preservation,
+PNG/JSON rename and move undo/redo round trips including persistent-journal
+recovery after rollback failure, mixed ring-buffer history ordering, branching,
+capacity eviction, failed-action retry, and saved-state comparison,
+folder create/move undo/redo round trips and subtree rejection, orphan-sidecar
+collision safety, atomic-write failure preservation,
 lossless BGRA PNG encode/decode and replacement, and reusable preview capture
 surfaces with removal of invisible resize-border pixels from `PrintWindow`
 frames. PNG coverage includes all 161 valid PngSuite images, comparison with the
