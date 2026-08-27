@@ -125,7 +125,9 @@ destination to the corresponding directory.
 
 ## Tests
 
-Run `test.bat`. The native test suite covers annotation names and geometry,
+Run `test.bat`. It first builds the shipped application with the strict
+production diagnostics, then runs the native test suite. The suite covers
+annotation names and geometry,
 click normalization, viewport transforms, strict and order-independent JSON
 parsing, arbitrarily long unknown keys, Unicode and escape round trips,
 malformed/truncated input, numeric and nesting limits, full annotation capacity,
@@ -150,6 +152,19 @@ persistent-worker reuse, failure recovery, and bounded preview shutdown.
 Run `install-hooks.bat` once after cloning. It configures the versioned
 `.githooks` directory. Both pre-commit and pre-push run the complete Windows
 suite and block the Git operation if any test fails.
+
+On a non-Windows development machine, keep machine names, credentials, and
+remote paths out of the repository by configuring a private executable runner:
+
+```sh
+git config --local goldens.windowsTestRunner /absolute/path/to/private-runner
+```
+
+`GOLDENS_WINDOWS_TEST_RUNNER` may be used instead. The hook passes the local
+repository root as the runner's only argument. The runner must transfer the
+exact working tree, including uncommitted changes, to Windows and return the
+exit status from `test.bat`; testing a separate unsynchronized checkout does
+not validate a commit.
 
 Run `benchmark.bat` to compare the original allocate-and-rescale paint path
 with the retained-buffer and scaled-image-cache paths used while panning.

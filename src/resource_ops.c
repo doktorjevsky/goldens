@@ -16,16 +16,84 @@ typedef struct {
     wchar_t new_png[MAX_PATH * 4];
 } ResourceMoveJournal;
 
-void golden_resource_json_path(const wchar_t *png_path, wchar_t *output, size_t capacity) {
-    if (!output || !capacity) return;
-    wcsncpy(output, png_path ? png_path : L"", capacity - 1);
-    output[capacity - 1] = 0;
-    wchar_t *slash = wcsrchr(output, L'\\');
-    wchar_t *dot = wcsrchr(output, L'.');
-    if (dot && (!slash || dot > slash)) {
-        size_t remaining = capacity - (size_t)(dot - output);
-        if (remaining >= 6) wcscpy(dot, L".json");
+static BOOL add_size(size_t *total, size_t amount) {
+    if (amount > SIZE_MAX - *total) return FALSE;
+    *total += amount;
+    return TRUE;
+}
+
+BOOL golden_path_copy(const wchar_t *path, wchar_t *output, size_t capacity) {
+    if (!output || !capacity) return FALSE;
+    if (!path) { output[0] = 0; return FALSE; }
+    size_t length = wcslen(path);
+    if (length >= capacity) { output[0] = 0; return FALSE; }
+    memmove(output, path, (length + 1) * sizeof(*output));
+    return TRUE;
+}
+
+static BOOL join_path_parts(const wchar_t *directory, const wchar_t *leaf,
+                            const wchar_t *suffix,
+                            wchar_t *output, size_t capacity) {
+    if (!output || !capacity) return FALSE;
+    if (!directory || !leaf || !suffix) { output[0] = 0; return FALSE; }
+
+    size_t directory_length = wcslen(directory);
+    size_t leaf_length = wcslen(leaf);
+    size_t suffix_length = wcslen(suffix);
+    BOOL needs_separator = directory_length &&
+        directory[directory_length - 1] != L'\\' &&
+        directory[directory_length - 1] != L'/';
+    size_t required = directory_length;
+    if (!add_size(&required, needs_separator ? 1u : 0u) ||
+        !add_size(&required, leaf_length) ||
+        !add_size(&required, suffix_length) ||
+        !add_size(&required, 1u) || required > capacity) {
+        output[0] = 0;
+        return FALSE;
     }
+
+    wchar_t *cursor = output;
+    memmove(cursor, directory, directory_length * sizeof(*cursor));
+    cursor += directory_length;
+    if (needs_separator) *cursor++ = L'\\';
+    memmove(cursor, leaf, leaf_length * sizeof(*cursor));
+    cursor += leaf_length;
+    memmove(cursor, suffix, (suffix_length + 1) * sizeof(*cursor));
+    return TRUE;
+}
+
+BOOL golden_path_join(const wchar_t *directory, const wchar_t *leaf,
+                      wchar_t *output, size_t capacity) {
+    return join_path_parts(directory, leaf, L"", output, capacity);
+}
+
+BOOL golden_path_join_extension(const wchar_t *directory, const wchar_t *stem,
+                                const wchar_t *extension,
+                                wchar_t *output, size_t capacity) {
+    if (!extension || extension[0] != L'.' || !extension[1]) {
+        if (output && capacity) output[0] = 0;
+        return FALSE;
+    }
+    return join_path_parts(directory, stem, extension, output, capacity);
+}
+
+BOOL golden_resource_json_path(const wchar_t *png_path,
+                               wchar_t *output, size_t capacity) {
+    if (!output || !capacity) return FALSE;
+    if (!png_path) { output[0] = 0; return FALSE; }
+    size_t length = wcslen(png_path);
+    if (length < 4 || _wcsicmp(png_path + length - 4, L".png")) {
+        output[0] = 0;
+        return FALSE;
+    }
+    size_t stem_length = length - 4;
+    if (stem_length > SIZE_MAX - 6 || stem_length + 6 > capacity) {
+        output[0] = 0;
+        return FALSE;
+    }
+    memmove(output, png_path, stem_length * sizeof(*output));
+    memcpy(output + stem_length, L".json", 6 * sizeof(*output));
+    return TRUE;
 }
 
 static BOOL move_file(const wchar_t *source, const wchar_t *destination,
@@ -56,8 +124,9 @@ GoldenResourceRenameResult golden_rename_resource_pair_with_move(
         return GOLDEN_RENAME_PNG_EXISTS;
 
     wchar_t old_json[MAX_PATH * 4], new_json[MAX_PATH * 4];
-    golden_resource_json_path(old_png, old_json, _countof(old_json));
-    golden_resource_json_path(new_png, new_json, _countof(new_json));
+    if (!golden_resource_json_path(old_png, old_json, _countof(old_json)) ||
+        !golden_resource_json_path(new_png, new_json, _countof(new_json)))
+        return GOLDEN_RENAME_INVALID_PATH;
     BOOL has_json = GetFileAttributesW(old_json) != INVALID_FILE_ATTRIBUTES;
     BOOL same_json = !_wcsicmp(old_json, new_json);
     if (!same_json && GetFileAttributesW(new_json) != INVALID_FILE_ATTRIBUTES)
@@ -95,12 +164,13 @@ GoldenResourceRenameResult golden_rename_resource_pair_transactional_with_move(
     ResourceMoveJournal journal = {0};
     journal.magic = RESOURCE_JOURNAL_MAGIC;
     journal.version = 1;
-    wcsncpy(journal.old_png, old_png ? old_png : L"",
-            _countof(journal.old_png) - 1);
-    wcsncpy(journal.new_png, new_png ? new_png : L"",
-            _countof(journal.new_png) - 1);
     wchar_t old_json[MAX_PATH * 4];
-    golden_resource_json_path(old_png, old_json, _countof(old_json));
+    if (!golden_path_copy(old_png, journal.old_png,
+                          _countof(journal.old_png)) ||
+        !golden_path_copy(new_png, journal.new_png,
+                          _countof(journal.new_png)) ||
+        !golden_resource_json_path(old_png, old_json, _countof(old_json)))
+        return GOLDEN_RENAME_INVALID_PATH;
     journal.has_json = path_exists(old_json);
     if (!golden_atomic_write_bytes(journal_path, &journal, sizeof(journal)))
         return GOLDEN_RENAME_JOURNAL_FAILED;
@@ -136,10 +206,11 @@ GoldenResourceRenameResult golden_recover_resource_pair_move(
         return GOLDEN_RENAME_RECOVERY_FAILED;
 
     wchar_t old_json_path[MAX_PATH * 4], new_json_path[MAX_PATH * 4];
-    golden_resource_json_path(journal.old_png, old_json_path,
-                              _countof(old_json_path));
-    golden_resource_json_path(journal.new_png, new_json_path,
-                              _countof(new_json_path));
+    if (!golden_resource_json_path(journal.old_png, old_json_path,
+                                   _countof(old_json_path)) ||
+        !golden_resource_json_path(journal.new_png, new_json_path,
+                                   _countof(new_json_path)))
+        return GOLDEN_RENAME_RECOVERY_FAILED;
     BOOL old_png = path_exists(journal.old_png);
     BOOL new_png = path_exists(journal.new_png);
     BOOL old_json = path_exists(old_json_path);

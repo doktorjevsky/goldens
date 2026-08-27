@@ -7,6 +7,7 @@
 typedef enum {
     GOLDEN_RENAME_OK,
     GOLDEN_RENAME_SOURCE_MISSING,
+    GOLDEN_RENAME_INVALID_PATH,
     GOLDEN_RENAME_PNG_EXISTS,
     GOLDEN_RENAME_JSON_EXISTS,
     GOLDEN_RENAME_PNG_FAILED,
@@ -31,8 +32,14 @@ typedef BOOL (*GoldenMoveFileOperation)(const wchar_t *source,
 
 BOOL golden_path_is_same_or_inside(const wchar_t *path,
                                    const wchar_t *directory);
-
-void golden_resource_json_path(const wchar_t *png_path, wchar_t *output, size_t capacity);
+BOOL golden_path_copy(const wchar_t *path, wchar_t *output, size_t capacity);
+BOOL golden_path_join(const wchar_t *directory, const wchar_t *leaf,
+                      wchar_t *output, size_t capacity);
+BOOL golden_path_join_extension(const wchar_t *directory, const wchar_t *stem,
+                                const wchar_t *extension,
+                                wchar_t *output, size_t capacity);
+BOOL golden_resource_json_path(const wchar_t *png_path,
+                               wchar_t *output, size_t capacity);
 GoldenResourceRenameResult golden_rename_resource_pair(const wchar_t *old_png,
                                                        const wchar_t *new_png);
 GoldenResourceRenameResult golden_rename_resource_pair_with_move(

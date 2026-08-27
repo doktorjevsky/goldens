@@ -7,6 +7,9 @@ if errorlevel 1 set "CC=C:\tools\llvm-mingw-20260616-ucrt-x86_64\bin\x86_64-w64-
 
 if not exist build mkdir build
 
+call build.bat build\goldens-test.exe
+if errorlevel 1 exit /b 1
+
 %CC% -std=c17 -O2 -Wall -Wextra -DUNICODE -D_UNICODE -DCOBJMACROS ^
   -D_WIN32_WINNT=0x0A00 -DWINVER=0x0A00 ^
   tests\model_tests.c src\model.c src\document.c -o build\model_tests.exe -luser32
