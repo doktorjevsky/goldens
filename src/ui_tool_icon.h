@@ -6,7 +6,8 @@
 typedef enum {
     GOLDEN_TOOL_ICON_SELECT,
     GOLDEN_TOOL_ICON_RECTANGLE,
-    GOLDEN_TOOL_ICON_CLICK
+    GOLDEN_TOOL_ICON_CLICK,
+    GOLDEN_TOOL_ICON_CLEAR_CLICK
 } GoldenToolIcon;
 
 void golden_draw_tool_icon(HDC dc, GoldenToolIcon icon, const RECT *bounds,

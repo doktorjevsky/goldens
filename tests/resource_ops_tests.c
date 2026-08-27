@@ -114,6 +114,32 @@ static int test_rollback_failure_is_reported(const wchar_t *directory) {
     return failed;
 }
 
+static int test_transaction_journal_recovers_split_pair(const wchar_t *directory) {
+    wchar_t old_png[MAX_PATH], new_png[MAX_PATH], old_json[MAX_PATH], new_json[MAX_PATH];
+    wchar_t journal[MAX_PATH];
+    if (!make_pair(directory, L"journal-recovery", old_png, new_png,
+                   old_json, new_json)) return 1;
+    _snwprintf(journal, _countof(journal), L"%s\\move.journal", directory);
+    MoveContext context = {0, (1u << 2) | (1u << 3)};
+    GoldenResourceRenameResult result =
+        golden_rename_resource_pair_transactional_with_move(
+            old_png, new_png, journal, controlled_move, &context);
+    int failed = result != GOLDEN_RENAME_ROLLBACK_FAILED ||
+        GetFileAttributesW(journal) == INVALID_FILE_ATTRIBUTES ||
+        GetFileAttributesW(new_png) == INVALID_FILE_ATTRIBUTES ||
+        GetFileAttributesW(old_json) == INVALID_FILE_ATTRIBUTES;
+    if (!failed)
+        failed = golden_recover_resource_pair_move(journal) != GOLDEN_RENAME_OK ||
+            GetFileAttributesW(journal) != INVALID_FILE_ATTRIBUTES ||
+            GetFileAttributesW(old_png) != INVALID_FILE_ATTRIBUTES ||
+            GetFileAttributesW(old_json) != INVALID_FILE_ATTRIBUTES ||
+            GetFileAttributesW(new_png) == INVALID_FILE_ATTRIBUTES ||
+            GetFileAttributesW(new_json) == INVALID_FILE_ATTRIBUTES;
+    DeleteFileW(old_png); DeleteFileW(old_json);
+    DeleteFileW(new_png); DeleteFileW(new_json); DeleteFileW(journal);
+    return failed;
+}
+
 static int test_first_move_failure_is_reported(const wchar_t *directory) {
     wchar_t old_png[MAX_PATH], new_png[MAX_PATH], old_json[MAX_PATH], new_json[MAX_PATH];
     if (!make_pair(directory, L"first-fails", old_png, new_png, old_json, new_json)) return 1;
@@ -126,6 +152,113 @@ static int test_first_move_failure_is_reported(const wchar_t *directory) {
         GetFileAttributesW(new_png) != INVALID_FILE_ATTRIBUTES;
     DeleteFileW(old_png); DeleteFileW(old_json);
     DeleteFileW(new_png); DeleteFileW(new_json);
+    return failed;
+}
+
+static int test_orphan_destination_json_blocks_png_move(const wchar_t *directory) {
+    wchar_t old_png[MAX_PATH], new_png[MAX_PATH], old_json[MAX_PATH], new_json[MAX_PATH];
+    _snwprintf(old_png, _countof(old_png), L"%s\\orphan-before.png", directory);
+    _snwprintf(new_png, _countof(new_png), L"%s\\orphan-after.png", directory);
+    golden_resource_json_path(old_png, old_json, _countof(old_json));
+    golden_resource_json_path(new_png, new_json, _countof(new_json));
+    if (!write_bytes(old_png, "png", 3) || !write_bytes(new_json, "unrelated", 9)) return 1;
+    GoldenResourceRenameResult result = golden_rename_resource_pair(old_png, new_png);
+    int failed = result != GOLDEN_RENAME_JSON_EXISTS ||
+        GetFileAttributesW(old_png) == INVALID_FILE_ATTRIBUTES ||
+        GetFileAttributesW(new_png) != INVALID_FILE_ATTRIBUTES ||
+        GetFileAttributesW(new_json) == INVALID_FILE_ATTRIBUTES;
+    DeleteFileW(old_png); DeleteFileW(old_json);
+    DeleteFileW(new_png); DeleteFileW(new_json);
+    return failed;
+}
+
+static int test_resource_pair_move_undo_redo(const wchar_t *directory) {
+    wchar_t first_png[MAX_PATH], second_png[MAX_PATH];
+    wchar_t first_json[MAX_PATH], second_json[MAX_PATH];
+    if (!make_pair(directory, L"round-trip", first_png, second_png,
+                   first_json, second_json)) return 1;
+    int failed = golden_rename_resource_pair(first_png, second_png) != GOLDEN_RENAME_OK ||
+        golden_rename_resource_pair(second_png, first_png) != GOLDEN_RENAME_OK ||
+        GetFileAttributesW(first_png) == INVALID_FILE_ATTRIBUTES ||
+        GetFileAttributesW(first_json) == INVALID_FILE_ATTRIBUTES ||
+        GetFileAttributesW(second_png) != INVALID_FILE_ATTRIBUTES ||
+        GetFileAttributesW(second_json) != INVALID_FILE_ATTRIBUTES;
+    if (!failed)
+        failed = golden_rename_resource_pair(first_png, second_png) != GOLDEN_RENAME_OK ||
+            GetFileAttributesW(second_png) == INVALID_FILE_ATTRIBUTES ||
+            GetFileAttributesW(second_json) == INVALID_FILE_ATTRIBUTES;
+    DeleteFileW(first_png); DeleteFileW(first_json);
+    DeleteFileW(second_png); DeleteFileW(second_json);
+    return failed;
+}
+
+static int test_directory_move(const wchar_t *directory) {
+    wchar_t source[MAX_PATH], destination[MAX_PATH], child[MAX_PATH];
+    _snwprintf(source, _countof(source), L"%s\\folder-before", directory);
+    _snwprintf(destination, _countof(destination), L"%s\\folder-after", directory);
+    _snwprintf(child, _countof(child), L"%s\\inside.png", source);
+    if (!CreateDirectoryW(source, NULL) || !write_bytes(child, "png", 3)) return 1;
+    GoldenDirectoryMoveResult result = golden_move_directory(source, destination);
+    _snwprintf(child, _countof(child), L"%s\\inside.png", destination);
+    int failed = result != GOLDEN_DIRECTORY_MOVE_OK ||
+        GetFileAttributesW(source) != INVALID_FILE_ATTRIBUTES ||
+        GetFileAttributesW(child) == INVALID_FILE_ATTRIBUTES;
+    if (!failed) {
+        result = golden_move_directory(destination, source);
+        _snwprintf(child, _countof(child), L"%s\\inside.png", source);
+        failed = result != GOLDEN_DIRECTORY_MOVE_OK ||
+            GetFileAttributesW(source) == INVALID_FILE_ATTRIBUTES ||
+            GetFileAttributesW(child) == INVALID_FILE_ATTRIBUTES ||
+            GetFileAttributesW(destination) != INVALID_FILE_ATTRIBUTES;
+    }
+    if (!failed) {
+        result = golden_move_directory(source, destination);
+        _snwprintf(child, _countof(child), L"%s\\inside.png", destination);
+        failed = result != GOLDEN_DIRECTORY_MOVE_OK ||
+            GetFileAttributesW(destination) == INVALID_FILE_ATTRIBUTES ||
+            GetFileAttributesW(child) == INVALID_FILE_ATTRIBUTES;
+    }
+    DeleteFileW(child);
+    RemoveDirectoryW(source);
+    RemoveDirectoryW(destination);
+    return failed;
+}
+
+static int test_directory_create_undo_redo(const wchar_t *directory) {
+    wchar_t path[MAX_PATH];
+    _snwprintf(path, _countof(path), L"%s\\created-folder", directory);
+    int failed = !CreateDirectoryW(path, NULL) || !RemoveDirectoryW(path) ||
+        GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES ||
+        !CreateDirectoryW(path, NULL) ||
+        GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES;
+    RemoveDirectoryW(path);
+    return failed;
+}
+
+static int test_directory_move_rejects_descendant(const wchar_t *directory) {
+    wchar_t source[MAX_PATH], destination[MAX_PATH];
+    _snwprintf(source, _countof(source), L"%s\\parent", directory);
+    _snwprintf(destination, _countof(destination), L"%s\\parent\\child\\parent", directory);
+    if (!CreateDirectoryW(source, NULL)) return 1;
+    GoldenDirectoryMoveResult result = golden_move_directory(source, destination);
+    int failed = result != GOLDEN_DIRECTORY_MOVE_DESTINATION_INSIDE_SOURCE ||
+        GetFileAttributesW(source) == INVALID_FILE_ATTRIBUTES;
+    RemoveDirectoryW(source);
+    return failed;
+}
+
+static int test_directory_move_failure_preserves_source(const wchar_t *directory) {
+    wchar_t source[MAX_PATH], destination[MAX_PATH];
+    _snwprintf(source, _countof(source), L"%s\\move-fails", directory);
+    _snwprintf(destination, _countof(destination), L"%s\\not-created", directory);
+    if (!CreateDirectoryW(source, NULL)) return 1;
+    MoveContext context = {0, 1u << 1};
+    GoldenDirectoryMoveResult result = golden_move_directory_with_move(
+        source, destination, controlled_move, &context);
+    int failed = result != GOLDEN_DIRECTORY_MOVE_FAILED || context.calls != 1 ||
+        GetFileAttributesW(source) == INVALID_FILE_ATTRIBUTES ||
+        GetFileAttributesW(destination) != INVALID_FILE_ATTRIBUTES;
+    RemoveDirectoryW(source);
     return failed;
 }
 
@@ -178,7 +311,14 @@ int main(void) {
 
     if (!failed) failed = test_json_failure_rolls_back(directory);
     if (!failed) failed = test_rollback_failure_is_reported(directory);
+    if (!failed) failed = test_transaction_journal_recovers_split_pair(directory);
     if (!failed) failed = test_first_move_failure_is_reported(directory);
+    if (!failed) failed = test_orphan_destination_json_blocks_png_move(directory);
+    if (!failed) failed = test_resource_pair_move_undo_redo(directory);
+    if (!failed) failed = test_directory_move(directory);
+    if (!failed) failed = test_directory_create_undo_redo(directory);
+    if (!failed) failed = test_directory_move_rejects_descendant(directory);
+    if (!failed) failed = test_directory_move_failure_preserves_source(directory);
 
     DeleteFileW(old_png); DeleteFileW(old_json);
     DeleteFileW(new_png); DeleteFileW(new_json); DeleteFileW(collision_png);

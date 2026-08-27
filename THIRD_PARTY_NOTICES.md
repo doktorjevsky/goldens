@@ -2,7 +2,7 @@
 
 ## Microsoft Fluent UI System Icons
 
-The toolbar icons in `assets/icons` are copied from
+The toolbar icons in `assets/icons` are copied from or derived from
 [Microsoft Fluent UI System Icons](https://github.com/microsoft/fluentui-system-icons):
 
 - Cursor 20 Regular

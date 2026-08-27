@@ -52,10 +52,17 @@ build\tooltip_tests.exe
 if errorlevel 1 exit /b 1
 
 %CC% -std=c17 -O2 -Wall -Wextra -DUNICODE -D_UNICODE ^
-  tests\resource_ops_tests.c src\resource_ops.c src\document.c src\model.c ^
+  tests\resource_ops_tests.c src\resource_ops.c src\atomic_file.c src\document.c src\model.c ^
   -o build\resource_ops_tests.exe -luser32
 if errorlevel 1 exit /b 1
 build\resource_ops_tests.exe
+if errorlevel 1 exit /b 1
+
+%CC% -std=c17 -O2 -Wall -Wextra -DUNICODE -D_UNICODE ^
+  tests\history_tests.c src\history.c ^
+  -o build\history_tests.exe -luser32
+if errorlevel 1 exit /b 1
+build\history_tests.exe
 if errorlevel 1 exit /b 1
 
 %CC% -std=c17 -O2 -Wall -Wextra -DUNICODE -D_UNICODE ^
