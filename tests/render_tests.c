@@ -48,6 +48,18 @@ int main(void) {
     if (edge != RGB(255, 0, 0)) failed = 1;
     if (interior == RGB(255, 0, 0)) failed = 1;
 
+    RECT dark_background = {0, 0, 4, 4};
+    FillRect(destination_dc, &dark_background,
+             (HBRUSH)GetStockObject(BLACK_BRUSH));
+    golden_draw_click_mark(destination_dc, (POINT){2, 2});
+    if (GetPixel(destination_dc, 2, 2) != RGB(0, 0, 0)) failed = 1;
+    if (GetPixel(destination_dc, 1, 1) != RGB(255, 255, 255)) failed = 1;
+
+    FillRect(destination_dc, &dark_background,
+             (HBRUSH)GetStockObject(WHITE_BRUSH));
+    golden_draw_click_mark(destination_dc, (POINT){2, 2});
+    if (GetPixel(destination_dc, 2, 2) != RGB(0, 0, 0)) failed = 1;
+
     GoldenBackBuffer back_buffer = {0};
     if (!golden_back_buffer_ensure(&back_buffer, destination_dc, 4, 4)) failed = 1;
     HBITMAP first_buffer = back_buffer.bitmap;
