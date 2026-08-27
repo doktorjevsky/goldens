@@ -1287,8 +1287,7 @@ static void draw_editor(HWND hwnd, HDC dc) {
         if (g.annotations[i].has_click) {
             int cx = r.left + (int)((r.right - r.left) * g.annotations[i].click_x);
             int cy = r.top + (int)((r.bottom - r.top) * g.annotations[i].click_y);
-            MoveToEx(dc, cx - 6, cy, NULL); LineTo(dc, cx + 7, cy);
-            MoveToEx(dc, cx, cy - 6, NULL); LineTo(dc, cx, cy + 7);
+            golden_draw_click_mark(dc, (POINT){cx, cy});
         }
     }
     if (!g.preview_mode && g.drawing) {
