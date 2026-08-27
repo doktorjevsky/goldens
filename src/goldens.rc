@@ -1,0 +1,3 @@
+#include "resource.h"
+
+IDI_GOLDENS ICON "assets\\goldens.ico"
