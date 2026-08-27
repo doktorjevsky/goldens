@@ -1,11 +1,18 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
-from litewinwrap.match import TargetAmbiguousError, best_match, match, match_all
-from litewinwrap.types import Capture, Point, Rect, Target
+from litewinwrap.match import (
+    TargetAmbiguousError,
+    best_match,
+    find,
+    match,
+    match_all,
+)
+from litewinwrap.types import Capture, HWND, Point, Rect, Target
 
 
 class MatchTests(unittest.TestCase):
@@ -13,6 +20,12 @@ class MatchTests(unittest.TestCase):
         generator = np.random.default_rng(42)
         self.template = generator.integers(0, 256, (10, 12, 3), dtype=np.uint8)
         self.target = Target("button", self.template, click=(0.25, 0.75))
+
+    def _capture_with_matches(self, *positions: tuple[int, int]) -> Capture:
+        pixels = np.zeros((60, 80, 3), dtype=np.uint8)
+        for x, y in positions:
+            pixels[y : y + 10, x : x + 12] = self.template
+        return Capture(pixels, Rect(0, 0, 80, 60))
 
     def test_returns_absolute_rectangle_and_click_point(self) -> None:
         pixels = np.zeros((60, 80, 3), dtype=np.uint8)
@@ -64,6 +77,78 @@ class MatchTests(unittest.TestCase):
 
         self.assertEqual(found.rect, Rect(6, 5, 18, 15))
         self.assertAlmostEqual(found.score, 1.0)
+
+    def test_find_can_retry_transient_ambiguity_until_match_is_unique(self) -> None:
+        ambiguous = self._capture_with_matches((6, 5), (50, 35))
+        unique = self._capture_with_matches((50, 35))
+
+        with (
+            patch(
+                "litewinwrap.match.capture",
+                side_effect=(ambiguous, unique),
+            ) as capture_window,
+            patch("litewinwrap.match.time.monotonic", side_effect=(0.0, 0.1)),
+            patch("litewinwrap.match.time.sleep") as sleep,
+        ):
+            found = find(
+                HWND(123),
+                self.target,
+                threshold=0.99,
+                timeout=1.0,
+                retry_on_ambiguity=True,
+            )
+
+        self.assertEqual(found.rect, Rect(50, 35, 62, 45))
+        self.assertEqual(capture_window.call_count, 2)
+        sleep.assert_called_once_with(0.05)
+
+    def test_find_reports_ambiguity_immediately_by_default(self) -> None:
+        ambiguous = self._capture_with_matches((6, 5), (50, 35))
+
+        with (
+            patch(
+                "litewinwrap.match.capture",
+                return_value=ambiguous,
+            ) as capture_window,
+            patch("litewinwrap.match.time.monotonic", return_value=0.0),
+            patch("litewinwrap.match.time.sleep") as sleep,
+        ):
+            with self.assertRaises(TargetAmbiguousError):
+                find(
+                    HWND(123),
+                    self.target,
+                    threshold=0.99,
+                    timeout=1.0,
+                )
+
+        capture_window.assert_called_once_with(HWND(123))
+        sleep.assert_not_called()
+
+    def test_find_reports_last_ambiguity_at_retry_deadline(self) -> None:
+        first = self._capture_with_matches((6, 5), (50, 35))
+        last = self._capture_with_matches((10, 10), (40, 30))
+
+        with (
+            patch("litewinwrap.match.capture", side_effect=(first, last)),
+            patch(
+                "litewinwrap.match.time.monotonic",
+                side_effect=(0.0, 0.2, 1.0),
+            ),
+            patch("litewinwrap.match.time.sleep"),
+        ):
+            with self.assertRaises(TargetAmbiguousError) as raised:
+                find(
+                    HWND(123),
+                    self.target,
+                    threshold=0.99,
+                    timeout=1.0,
+                    retry_on_ambiguity=True,
+                )
+
+        self.assertEqual(
+            {item.rect.left for item in raised.exception.matches},
+            {10, 40},
+        )
 
 
 if __name__ == "__main__":

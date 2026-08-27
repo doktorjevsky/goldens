@@ -297,7 +297,10 @@ def find(
     threshold: float = 0.90,
     timeout: float = 0.0,
     overlap: float = 0.30,
+    retry_on_ambiguity: bool = False,
 ) -> Match:
+    """Wait for one target match, optionally retrying transient ambiguity."""
+
     started = time.monotonic()
     deadline = started + max(0.0, timeout)
     best_score = -1.0
@@ -317,11 +320,13 @@ def find(
         best_score = max(best_score, current_best)
         if len(matches) == 1:
             return matches[0]
-        if len(matches) > 1:
+        if len(matches) > 1 and not retry_on_ambiguity:
             raise TargetAmbiguousError(target, matches)
 
         remaining = deadline - time.monotonic()
         if remaining <= 0:
+            if matches:
+                raise TargetAmbiguousError(target, matches)
             elapsed = time.monotonic() - started
             raise TargetNotFoundError(
                 target,
@@ -383,6 +388,7 @@ def click(
     threshold: float = 0.90,
     timeout: float = 0.0,
     overlap: float = 0.30,
+    retry_on_ambiguity: bool = False,
     button: mouse.Button = "left",
 ) -> Match:
     found = find(
@@ -391,6 +397,7 @@ def click(
         threshold=threshold,
         timeout=timeout,
         overlap=overlap,
+        retry_on_ambiguity=retry_on_ambiguity,
     )
     mouse.click(found.click, button=button)
     return found

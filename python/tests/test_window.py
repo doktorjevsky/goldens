@@ -53,15 +53,34 @@ class WindowTests(unittest.TestCase):
             patch("litewinwrap.match.click_best", return_value=found) as click_best,
         ):
             self.assertIs(window.screenshot(), capture)
-            self.assertIs(window.find_target(target, timeout=2.0), found)
+            self.assertIs(
+                window.find_target(
+                    target,
+                    timeout=2.0,
+                    retry_on_ambiguity=True,
+                ),
+                found,
+            )
             self.assertIs(window.find_best_target(target, timeout=2.0), found)
             self.assertEqual(window.find_targets(target, timeout=2.0), (found,))
-            self.assertIs(window.click_target(target, timeout=2.0), found)
+            self.assertIs(
+                window.click_target(
+                    target,
+                    timeout=2.0,
+                    retry_on_ambiguity=True,
+                ),
+                found,
+            )
             self.assertIs(window.click_best_target(target, timeout=2.0), found)
 
         screenshot.assert_called_once_with(HWND(123))
         find.assert_called_once_with(
-            HWND(123), target, threshold=0.9, timeout=2.0, overlap=0.3
+            HWND(123),
+            target,
+            threshold=0.9,
+            timeout=2.0,
+            overlap=0.3,
+            retry_on_ambiguity=True,
         )
         find_best.assert_called_once_with(
             HWND(123), target, threshold=0.9, timeout=2.0, overlap=0.3
@@ -75,6 +94,7 @@ class WindowTests(unittest.TestCase):
             threshold=0.9,
             timeout=2.0,
             overlap=0.3,
+            retry_on_ambiguity=True,
             button="left",
         )
         click_best.assert_called_once_with(
