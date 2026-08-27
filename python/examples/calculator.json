@@ -1,0 +1,68 @@
+{
+  "annotations": [
+    {
+      "name": "button_7",
+      "boundary": { "x": 6, "y": 323, "width": 74, "height": 45 }
+    },
+    {
+      "name": "button_8",
+      "boundary": { "x": 87, "y": 324, "width": 73, "height": 43 }
+    },
+    {
+      "name": "button_9",
+      "boundary": { "x": 165, "y": 324, "width": 73, "height": 41 }
+    },
+    {
+      "name": "button_4",
+      "boundary": { "x": 6, "y": 377, "width": 72, "height": 42 }
+    },
+    {
+      "name": "button_5",
+      "boundary": { "x": 89, "y": 377, "width": 70, "height": 41 }
+    },
+    {
+      "name": "button_6",
+      "boundary": { "x": 166, "y": 376, "width": 70, "height": 42 }
+    },
+    {
+      "name": "button_1",
+      "boundary": { "x": 9, "y": 432, "width": 65, "height": 39 }
+    },
+    {
+      "name": "button_2",
+      "boundary": { "x": 86, "y": 427, "width": 74, "height": 45 }
+    },
+    {
+      "name": "button_3",
+      "boundary": { "x": 165, "y": 427, "width": 71, "height": 45 }
+    },
+    {
+      "name": "button_0",
+      "boundary": { "x": 88, "y": 482, "width": 69, "height": 43 }
+    },
+    {
+      "name": "button_plus",
+      "boundary": { "x": 245, "y": 428, "width": 68, "height": 43 }
+    },
+    {
+      "name": "button_minus",
+      "boundary": { "x": 248, "y": 374, "width": 65, "height": 43 }
+    },
+    {
+      "name": "button_times",
+      "boundary": { "x": 246, "y": 322, "width": 69, "height": 44 }
+    },
+    {
+      "name": "button_div",
+      "boundary": { "x": 248, "y": 269, "width": 66, "height": 44 }
+    },
+    {
+      "name": "button_equals",
+      "boundary": { "x": 245, "y": 480, "width": 70, "height": 49 }
+    },
+    {
+      "name": "not_found",
+      "boundary": { "x": 243, "y": 107, "width": 75, "height": 209 }
+    }
+  ]
+}
