@@ -29,6 +29,7 @@
 #include "resource_watcher.h"
 #include "atomic_file.h"
 #include "history.h"
+#include "resource.h"
 
 #define APP_NAME L"Goldens"
 #define WINDOW_TIMER 1
@@ -3211,7 +3212,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR command_line, 
     WNDCLASSW main_class = {0};
     main_class.lpfnWndProc = MainProc;
     main_class.hInstance = instance;
-    main_class.hIcon = LoadIconW(NULL, IDI_APPLICATION);
+    main_class.hIcon = LoadIconW(instance, MAKEINTRESOURCEW(IDI_GOLDENS));
     main_class.hCursor = LoadCursorW(NULL, IDC_ARROW);
     main_class.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
     main_class.lpszClassName = L"GoldensMain";

@@ -1,0 +1,6 @@
+#ifndef GOLDENS_RESOURCE_H
+#define GOLDENS_RESOURCE_H
+
+#define IDI_GOLDENS 101
+
+#endif
