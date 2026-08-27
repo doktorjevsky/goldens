@@ -65,6 +65,18 @@ BOOL golden_path_join_extension(const wchar_t *directory, const wchar_t *stem,
     return join_path_parts(directory, stem, extension, output, capacity);
 }
 
+BOOL golden_path_is_same_or_descendant(const wchar_t *candidate,
+                                       const wchar_t *ancestor) {
+    if (!candidate || !ancestor || !candidate[0] || !ancestor[0]) return FALSE;
+    size_t length = wcslen(ancestor);
+    while (length > 1 && (ancestor[length - 1] == L'\\' ||
+                          ancestor[length - 1] == L'/'))
+        --length;
+    if (_wcsnicmp(candidate, ancestor, length)) return FALSE;
+    return candidate[length] == 0 || candidate[length] == L'\\' ||
+           candidate[length] == L'/';
+}
+
 BOOL golden_resource_json_path(const wchar_t *png_path,
                                wchar_t *output, size_t capacity) {
     if (!output || !capacity) return FALSE;

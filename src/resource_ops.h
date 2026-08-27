@@ -25,6 +25,8 @@ BOOL golden_path_join(const wchar_t *directory, const wchar_t *leaf,
 BOOL golden_path_join_extension(const wchar_t *directory, const wchar_t *stem,
                                 const wchar_t *extension,
                                 wchar_t *output, size_t capacity);
+BOOL golden_path_is_same_or_descendant(const wchar_t *candidate,
+                                       const wchar_t *ancestor);
 BOOL golden_resource_json_path(const wchar_t *png_path,
                                wchar_t *output, size_t capacity);
 GoldenResourceRenameResult golden_rename_resource_pair(const wchar_t *old_png,
