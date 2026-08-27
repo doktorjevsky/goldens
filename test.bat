@@ -59,6 +59,14 @@ build\resource_ops_tests.exe
 if errorlevel 1 exit /b 1
 
 %CC% -std=c17 -O2 -Wall -Wextra -DUNICODE -D_UNICODE ^
+  -D_WIN32_WINNT=0x0A00 -DWINVER=0x0A00 ^
+  tests\resource_watcher_tests.c src\resource_watcher.c ^
+  -o build\resource_watcher_tests.exe -luser32
+if errorlevel 1 exit /b 1
+build\resource_watcher_tests.exe
+if errorlevel 1 exit /b 1
+
+%CC% -std=c17 -O2 -Wall -Wextra -DUNICODE -D_UNICODE ^
   tests\history_tests.c src\history.c ^
   -o build\history_tests.exe -luser32
 if errorlevel 1 exit /b 1
