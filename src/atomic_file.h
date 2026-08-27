@@ -12,5 +12,7 @@ BOOL golden_atomic_replace_file(const wchar_t *destination,
                                 void *context);
 BOOL golden_atomic_write_bytes(const wchar_t *destination,
                                const void *data, size_t length);
+BOOL golden_atomic_copy_file(const wchar_t *source,
+                             const wchar_t *destination);
 
 #endif

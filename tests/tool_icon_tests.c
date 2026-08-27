@@ -1,6 +1,7 @@
 #include <windows.h>
 
 #include <stdio.h>
+#include <string.h>
 
 #include "../src/ui_tool_icon.h"
 
@@ -44,7 +45,7 @@ int main(void) {
     for (int dpi_index = 0; dpi_index < 2; ++dpi_index) {
         UINT dpi = dpi_index ? 192 : 96;
         for (int icon = GOLDEN_TOOL_ICON_SELECT;
-             icon <= GOLDEN_TOOL_ICON_CLICK; ++icon) {
+             icon <= GOLDEN_TOOL_ICON_CLEAR_CLICK; ++icon) {
             for (int i = 0; i < width * height; ++i) pixels[i] = 0x00ffffff;
             golden_draw_tool_icon(dc, (GoldenToolIcon)icon, &bounds,
                                   RGB(12, 34, 56), dpi);
@@ -52,6 +53,16 @@ int main(void) {
                 changed_outside(pixels, width, height, &bounds)) failed = 1;
         }
     }
+
+    for (int i = 0; i < width * height; ++i) pixels[i] = 0x00ffffff;
+    golden_draw_tool_icon(dc, GOLDEN_TOOL_ICON_CLICK, &bounds,
+                          RGB(12, 34, 56), 96);
+    DWORD click_pixels[96 * 96];
+    memcpy(click_pixels, pixels, sizeof(click_pixels));
+    for (int i = 0; i < width * height; ++i) pixels[i] = 0x00ffffff;
+    golden_draw_tool_icon(dc, GOLDEN_TOOL_ICON_CLEAR_CLICK, &bounds,
+                          RGB(12, 34, 56), 96);
+    if (!memcmp(click_pixels, pixels, sizeof(click_pixels))) failed = 1;
 
     for (int i = 0; i < width * height; ++i) pixels[i] = 0x00ffffff;
     RECT too_small = {20, 20, 24, 24};

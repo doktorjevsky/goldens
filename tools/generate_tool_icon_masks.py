@@ -11,7 +11,7 @@ from PIL import Image
 
 
 ROOT = Path(__file__).resolve().parents[1]
-ICONS = ("cursor", "rectangle", "target")
+ICONS = ("cursor", "rectangle", "target", "target-clear")
 TOKEN = re.compile(r"[A-Za-z]|[-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?")
 
 

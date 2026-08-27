@@ -95,3 +95,14 @@ BOOL golden_atomic_write_bytes(const wchar_t *destination,
     ByteWriterContext context = {(const BYTE *)data, length};
     return golden_atomic_replace_file(destination, write_bytes, &context);
 }
+
+static BOOL copy_file_writer(const wchar_t *temporary_path, void *context) {
+    return CopyFileW((const wchar_t *)context, temporary_path, FALSE);
+}
+
+BOOL golden_atomic_copy_file(const wchar_t *source,
+                             const wchar_t *destination) {
+    if (!source || !source[0]) return FALSE;
+    return golden_atomic_replace_file(destination, copy_file_writer,
+                                      (void *)source);
+}
