@@ -201,5 +201,6 @@ cases are counted and reported but deliberately not treated as pass/fail.
 
 The [`python`](python) subproject contains a first-pass Windows scripting layer
 for live window discovery, child-window enumeration, mouse and keyboard input,
-OpenCV template matching, and loading PNG/JSON resources as target mappings.
+OpenCV template matching, and loading individual PNG/JSON pairs or recursive
+resource roots as mappings of path-qualified targets.
 The native Goldens application remains dependency-free.

@@ -20,6 +20,7 @@ py -m pip install -e .
 ```python
 import re
 import subprocess
+from pathlib import Path
 
 from litewinwrap import Goldens, Window, win32
 
@@ -32,22 +33,35 @@ window = Window.find(
 )
 window.focus()
 
-targets = Goldens("calculator.png")
-found = window.click_target(targets["button_8"], threshold=0.92, timeout=2.0)
+targets = Goldens.from_root(Path("resources"))
+found = window.click_target(
+    targets["calculator/button_8"],
+    threshold=0.92,
+    timeout=2.0,
+)
 
 print(found.score, found.rect, found.click)
 ```
 
-`Goldens` eagerly reads the PNG and adjacent JSON sidecar. It validates every
-annotation and exposes copied, read-only crops through normal mapping operations:
+`Goldens.from_root()` recursively discovers annotated PNGs below a resource
+root. Each target is qualified by the PNG's root-relative path without its
+extension, using `/` on every platform. `Goldens.from_png()` loads one PNG/JSON
+pair using the PNG stem as that same namespace. Both forms eagerly validate the
+resources and expose copied, read-only crops through normal mapping operations:
 
 ```python
-targets["button_8"]
-targets.get("button_8")
-"button_8" in targets
+targets["calculator/button_8"]
+targets.get("calculator/button_8")
+"calculator/button_8" in targets
 targets.keys()
 targets.items()
 ```
+
+For example, an annotation named `submit` in
+`resources/dialogs/login.png` has the identifier `dialogs/login/submit`.
+PNG files without an adjacent JSON sidecar are not targets and are skipped by
+root discovery. Annotation names cannot contain `/`, and identifiers that differ
+only by case are rejected so the mapping remains safe on Windows filesystems.
 
 `Window.screenshot()`, `find_target()`, `find_targets()`, and `click_target()`
 take fresh screenshots and retain no target or match state on the window.
@@ -63,7 +77,7 @@ ambiguous at the deadline, it raises `TargetAmbiguousError` with those matches:
 
 ```python
 window.click_target(
-    targets["button_8"],
+    targets["calculator/button_8"],
     timeout=2.0,
     retry_on_ambiguity=True,
 )

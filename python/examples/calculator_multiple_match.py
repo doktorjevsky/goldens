@@ -20,12 +20,11 @@ def main() -> None:
     calculator.focus(timeout=2.0)
 
     example_dir = Path(__file__).parent
-    buttons = Goldens(example_dir / "calculator.png")
-    ones = Goldens(example_dir / "calculator_ones.png")
+    targets = Goldens.from_root(example_dir)
 
     for _ in range(6):
         calculator.click_target(
-            buttons["button_1"],
+            targets["calculator/button_1"],
             threshold=0.92,
             timeout=2.0,
         )
@@ -36,7 +35,7 @@ def main() -> None:
 
     try:
         calculator.find_target(
-            ones["multiple_match"],
+            targets["calculator_ones/multiple_match"],
             threshold=0.92,
             timeout=2.0,
         )

@@ -91,41 +91,132 @@ def _read_click(annotation: dict[str, Any], name: str) -> tuple[float, float] | 
     return float(x), float(y)
 
 
-def _read_target(image: np.ndarray, value: Any, index: int) -> Target:
+def _read_target(
+    image: np.ndarray,
+    value: Any,
+    index: int,
+    namespace: str,
+) -> Target:
     if not isinstance(value, dict):
         raise GoldensFormatError(f"Annotation {index} must be an object")
 
     name = value.get("name")
     if not isinstance(name, str) or not name:
         raise GoldensFormatError(f"Annotation {index} has an invalid name")
+    if "/" in name:
+        raise GoldensFormatError(
+            f"Annotation {name!r} contains '/', which is reserved for namespaces"
+        )
 
     image_height, image_width = image.shape[:2]
     x, y, width, height = _read_boundary(value, name, image_width, image_height)
     pixels = image[y : y + height, x : x + width].copy()
     pixels.setflags(write=False)
-    return Target(name=name, pixels=pixels, click=_read_click(value, name))
+    return Target(
+        name=f"{namespace}/{name}",
+        pixels=pixels,
+        click=_read_click(value, name),
+    )
+
+
+def _resource_targets(png: Path, namespace: str) -> list[Target]:
+    image = _load_image(png)
+    document = _load_sidecar(png.with_suffix(".json"))
+    return [
+        _read_target(image, value, index, namespace)
+        for index, value in enumerate(document["annotations"])
+    ]
+
+
+def _pngs_below(root: Path) -> list[Path]:
+    try:
+        candidates = root.rglob("*")
+        return sorted(
+            (
+                path
+                for path in candidates
+                if path.suffix.casefold() == ".png"
+                and not path.is_symlink()
+                and path.is_file()
+                and path.with_suffix(".json").is_file()
+            ),
+            key=lambda path: (
+                path.relative_to(root).as_posix().casefold(),
+                path.relative_to(root).as_posix(),
+            ),
+        )
+    except OSError as error:
+        raise GoldensFormatError(f"Could not scan golden root: {root}") from error
 
 
 class Goldens(Mapping[str, Target]):
-    """A Goldens PNG/JSON pair exposed as a read-only mapping of targets."""
+    """One or more golden resources exposed as a read-only target mapping."""
 
-    def __init__(self, png: str | Path):
-        self._path = Path(png)
-        image = _load_image(self._path)
-        document = _load_sidecar(self._path.with_suffix(".json"))
+    def __init__(self) -> None:
+        raise TypeError("Use Goldens.from_png() or Goldens.from_root()")
+
+    @classmethod
+    def _from_resources(
+        cls,
+        resources: list[tuple[Path, str]],
+        *,
+        root: Path | None,
+    ) -> Goldens:
+        result = cls.__new__(cls)
         targets: dict[str, Target] = {}
+        identifiers: dict[str, str] = {}
 
-        for index, value in enumerate(document["annotations"]):
-            target = _read_target(image, value, index)
-            if target.name in targets:
-                raise GoldensFormatError(f"Duplicate annotation name: {target.name!r}")
-            targets[target.name] = target
+        for png, namespace in resources:
+            for target in _resource_targets(png, namespace):
+                folded = target.name.casefold()
+                previous = identifiers.get(folded)
+                if previous is not None:
+                    raise GoldensFormatError(
+                        f"Duplicate target identifier: {previous!r} and "
+                        f"{target.name!r}"
+                    )
+                identifiers[folded] = target.name
+                targets[target.name] = target
 
-        self._targets = targets
+        result._targets = targets
+        result._paths = tuple(png for png, _namespace in resources)
+        result._root = root
+        return result
+
+    @classmethod
+    def from_png(cls, png: str | Path) -> Goldens:
+        """Load one PNG/JSON pair using the PNG stem as its namespace."""
+
+        path = Path(png)
+        if path.suffix.casefold() != ".png":
+            raise GoldensFormatError(f"Golden image must be a PNG: {path}")
+        return cls._from_resources([(path, path.stem)], root=None)
+
+    @classmethod
+    def from_root(cls, root: str | Path) -> Goldens:
+        """Recursively load every annotated PNG below a namespace root."""
+
+        root_path = Path(root)
+        if not root_path.is_dir():
+            raise GoldensFormatError(
+                f"Golden root is not a directory: {root_path}"
+            )
+        resources = [
+            (
+                png,
+                png.relative_to(root_path).with_suffix("").as_posix(),
+            )
+            for png in _pngs_below(root_path)
+        ]
+        return cls._from_resources(resources, root=root_path)
 
     @property
-    def path(self) -> Path:
-        return self._path
+    def paths(self) -> tuple[Path, ...]:
+        return self._paths
+
+    @property
+    def root(self) -> Path | None:
+        return self._root
 
     def __getitem__(self, name: str) -> Target:
         return self._targets[name]
