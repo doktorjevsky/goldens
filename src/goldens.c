@@ -19,6 +19,7 @@
 #include "document.h"
 #include "window_tracker.h"
 #include "image_io.h"
+#include "clipboard_image.h"
 #include "preview_capture.h"
 #include "preview_service.h"
 #include "editor_render.h"
@@ -41,7 +42,8 @@
 #define WM_BEGIN_TREE_RENAME (WM_APP + 4)
 
 enum {
-    ID_OPEN = 100, ID_NEW_FOLDER, ID_SAVE, ID_EXIT, ID_UNDO, ID_REDO, ID_RENAME, ID_DELETE,
+    ID_OPEN = 100, ID_NEW_FOLDER, ID_SAVE, ID_EXIT, ID_UNDO, ID_REDO,
+    ID_COPY, ID_PASTE, ID_RENAME, ID_DELETE,
     ID_CLEAR_CLICK, ID_FIT, ID_ZOOM_OUT, ID_ZOOM_IN, ID_ACTUAL,
     ID_CAPTURE, ID_RECAPTURE, ID_REFRESH,
     ID_TOOL_SELECT, ID_TOOL_RECTANGLE, ID_TOOL_CLICK,
@@ -192,6 +194,11 @@ static void draw_tool_button(const DRAWITEMSTRUCT *item);
 static void create_folder(void);
 static BOOL apply_resource_history(GoldenHistoryEntry *entry, BOOL undo);
 static void discard_history_entry(GoldenHistoryEntry *entry, void *context);
+static BOOL make_history_temporary_path(const wchar_t *extension,
+                                        wchar_t *path, size_t capacity);
+static void update_state_after_resource_move(GoldenHistoryKind kind,
+                                             const wchar_t *source,
+                                             const wchar_t *destination);
 
 static void show_error(const wchar_t *message) {
     MessageBoxW(g.main, message, APP_NAME, MB_OK | MB_ICONERROR);
@@ -212,7 +219,10 @@ static void discard_history_entry(GoldenHistoryEntry *entry, void *context) {
     else if (entry->kind == GOLDEN_HISTORY_RECAPTURE_PNG) {
         DeleteFileW(entry->destination);
         DeleteFileW(entry->auxiliary);
-    }
+    } else if (entry->kind == GOLDEN_HISTORY_DELETE_PNG && entry->staged)
+        delete_resource_pair(entry->destination);
+    else if (entry->kind == GOLDEN_HISTORY_REPLACE_MOVE_PNG && entry->staged)
+        delete_resource_pair(entry->auxiliary);
 }
 
 static wchar_t *dup_wide(const wchar_t *value) {
@@ -512,6 +522,9 @@ static UINT active_width(void) {
 static UINT active_height(void) {
     return g.preview_mode ? g.preview_image.height : g.resource_visible ? g.image_h : 0;
 }
+static UINT active_stride(void) {
+    return g.preview_mode ? g.preview_image.stride : g.resource_visible ? g.stride : 0;
+}
 
 static BOOL load_png(const wchar_t *path) {
     GoldenImage image = {0};
@@ -734,6 +747,57 @@ typedef struct {
     BOOL directory;
 } ResourceEntry;
 
+typedef struct {
+    wchar_t **paths;
+    size_t count;
+    size_t capacity;
+} ExpandedResourcePaths;
+
+static void remember_expanded_resource_paths(HTREEITEM item,
+                                             ExpandedResourcePaths *expanded) {
+    while (item) {
+        ResourceTreeNode *node = tree_node_data(item);
+        if (node && node->kind == RESOURCE_DIRECTORY && node->path &&
+            (TreeView_GetItemState(g.tree, item, TVIS_EXPANDED) &
+             TVIS_EXPANDED)) {
+            if (expanded->count == expanded->capacity) {
+                size_t next = expanded->capacity > SIZE_MAX / 2 ? 0 :
+                    expanded->capacity ? expanded->capacity * 2 : 16;
+                if (next && next <= SIZE_MAX / sizeof(*expanded->paths)) {
+                    wchar_t **grown = (wchar_t **)realloc(
+                        expanded->paths, next * sizeof(*expanded->paths));
+                    if (grown) {
+                        expanded->paths = grown;
+                        expanded->capacity = next;
+                    }
+                }
+            }
+            if (expanded->count < expanded->capacity) {
+                wchar_t *path = dup_wide(node->path);
+                if (path) expanded->paths[expanded->count++] = path;
+            }
+        }
+        remember_expanded_resource_paths(TreeView_GetChild(g.tree, item),
+                                         expanded);
+        item = TreeView_GetNextSibling(g.tree, item);
+    }
+}
+
+static void restore_expanded_resource_paths(
+    const ExpandedResourcePaths *expanded) {
+    for (size_t i = 0; i < expanded->count; ++i) {
+        HTREEITEM item = find_resource_item(TreeView_GetRoot(g.tree),
+                                            expanded->paths[i]);
+        if (item) TreeView_Expand(g.tree, item, TVE_EXPAND);
+    }
+}
+
+static void free_expanded_resource_paths(ExpandedResourcePaths *expanded) {
+    for (size_t i = 0; i < expanded->count; ++i) free(expanded->paths[i]);
+    free(expanded->paths);
+    *expanded = (ExpandedResourcePaths){0};
+}
+
 static int compare_resources(const void *left, const void *right) {
     const ResourceEntry *a = (const ResourceEntry *)left;
     const ResourceEntry *b = (const ResourceEntry *)right;
@@ -785,7 +849,9 @@ static void populate_directory(HTREEITEM parent, const wchar_t *directory) {
     free(entries);
 }
 
-static void refresh_resources(void) {
+static void refresh_resources_expanding(const wchar_t *expand_path) {
+    ExpandedResourcePaths expanded = {0};
+    remember_expanded_resource_paths(TreeView_GetRoot(g.tree), &expanded);
     g.rebuilding_resources = TRUE;
     free_tree_item(g.tree, TreeView_GetRoot(g.tree));
     TreeView_DeleteAllItems(g.tree);
@@ -795,12 +861,14 @@ static void refresh_resources(void) {
                               journal, _countof(journal))) {
             show_error(L"The resource root path is too long for transaction recovery.");
             g.rebuilding_resources = FALSE;
+            free_expanded_resource_paths(&expanded);
             update_capture_availability();
             return;
         }
         if (golden_recover_resource_pair_move(journal) != GOLDEN_RENAME_OK) {
             show_error(L"Goldens found an interrupted resource move that Windows could not recover. Close programs using the files, then refresh.");
             g.rebuilding_resources = FALSE;
+            free_expanded_resource_paths(&expanded);
             update_capture_availability();
             return;
         }
@@ -809,10 +877,24 @@ static void refresh_resources(void) {
         HTREEITEM root = insert_path_item(g.tree, TVI_ROOT, label, g.root, TRUE);
         populate_directory(root, g.root);
         TreeView_Expand(g.tree, root, TVE_EXPAND);
+        restore_expanded_resource_paths(&expanded);
+        if (expand_path && expand_path[0]) {
+            HTREEITEM target = find_resource_item(TreeView_GetRoot(g.tree),
+                                                  expand_path);
+            if (target) {
+                TreeView_EnsureVisible(g.tree, target);
+                TreeView_Expand(g.tree, target, TVE_EXPAND);
+            }
+        }
     }
+    free_expanded_resource_paths(&expanded);
     g.rebuilding_resources = FALSE;
     refresh_annotation_tree();
     update_capture_availability();
+}
+
+static void refresh_resources(void) {
+    refresh_resources_expanding(NULL);
 }
 
 static void remember_root(void) {
@@ -1445,10 +1527,25 @@ static ResourceTreeNode *selected_active_resource_node(void) {
     return NULL;
 }
 
+static ResourceTreeNode *selected_tree_node(void) {
+    return g.tree ? tree_node_data(TreeView_GetSelection(g.tree)) : NULL;
+}
+
+static BOOL resource_delete_available(void) {
+    HWND focus = GetFocus();
+    ResourceTreeNode *node = selected_tree_node();
+    return node && node->kind == RESOURCE_PNG && node->path &&
+           (focus == g.tree || IsChild(g.tree, focus));
+}
+
 static BOOL annotation_action_available(void) {
     return !g.preview_mode && g.resource_visible &&
            selected_active_resource_node() != NULL &&
            g.selected >= 0 && g.selected < g.annotation_count;
+}
+
+static BOOL delete_action_available(void) {
+    return resource_delete_available() || annotation_action_available();
 }
 
 static BOOL click_clear_available(void) {
@@ -1489,9 +1586,15 @@ static void update_menu_availability(void) {
                              golden_history_can_undo(&g.history));
     set_menu_command_enabled(g.edit_menu, ID_REDO,
                              golden_history_can_redo(&g.history));
+    set_menu_command_enabled(g.edit_menu, ID_COPY, image_available);
+    set_menu_command_enabled(g.edit_menu, ID_PASTE,
+                             root_available && golden_clipboard_has_image());
     set_menu_command_enabled(g.edit_menu, ID_RENAME, tree_rename_available());
-    set_menu_command_enabled(g.edit_menu, ID_DELETE,
-                             annotation_action_available());
+    BOOL deleting_resource = resource_delete_available();
+    ModifyMenuW(g.edit_menu, ID_DELETE, MF_BYCOMMAND | MF_STRING, ID_DELETE,
+                deleting_resource ? L"Delete PNG and Sidecar\tDel" :
+                                    L"Delete Annotation\tDel");
+    set_menu_command_enabled(g.edit_menu, ID_DELETE, delete_action_available());
     set_menu_command_enabled(g.edit_menu, ID_CLEAR_CLICK,
                              click_clear_available());
     set_menu_command_enabled(g.view_menu, ID_FIT, image_available);
@@ -1667,6 +1770,20 @@ static void update_title_for_active_resource(void) {
     }
 }
 
+static void clear_active_resource(const wchar_t *parent) {
+    clear_image();
+    g.image_path[0] = 0;
+    g.annotation_count = g.saved_annotation_count = 0;
+    g.selected = -1;
+    g.dirty = FALSE;
+    if (parent) golden_path_copy(parent, g.current_dir, _countof(g.current_dir));
+    SetWindowTextW(g.main, APP_NAME);
+    update_context_label();
+    update_status();
+    update_tool_availability();
+    InvalidateRect(g.editor, NULL, FALSE);
+}
+
 static void create_folder(void) {
     const wchar_t *directory = selected_directory_path();
     if (!directory || !directory[0]) {
@@ -1722,6 +1839,56 @@ static GoldenResourceRenameResult move_resource_pair(const wchar_t *source,
         return GOLDEN_RENAME_JOURNAL_FAILED;
     return golden_rename_resource_pair_transactional(source, destination,
                                                       journal);
+}
+
+static BOOL move_two_resource_pairs(const wchar_t *first_source,
+                                    const wchar_t *first_destination,
+                                    const wchar_t *second_source,
+                                    const wchar_t *second_destination) {
+    GoldenResourceRenameResult first = move_resource_pair(first_source,
+                                                           first_destination);
+    if (first != GOLDEN_RENAME_OK) {
+        show_error(resource_pair_error(first));
+        return FALSE;
+    }
+    GoldenResourceRenameResult second = move_resource_pair(second_source,
+                                                            second_destination);
+    if (second == GOLDEN_RENAME_OK) return TRUE;
+    GoldenResourceRenameResult rollback = move_resource_pair(first_destination,
+                                                              first_source);
+    if (rollback == GOLDEN_RENAME_OK)
+        show_error(resource_pair_error(second));
+    else
+        show_error(L"Goldens could not finish replacing the PNG, and Windows also could not restore the original destination. Check the source and destination folders before continuing.");
+    return FALSE;
+}
+
+static BOOL replace_resource_after_confirmation(const wchar_t *source,
+                                                const wchar_t *destination) {
+    wchar_t message[MAX_PATH * 4 + 256];
+    _snwprintf(message, _countof(message),
+        L"A PNG named '%s' already exists in the destination folder.\n\n"
+        L"Replace it and its JSON sidecar? You can undo this with Ctrl+Z.",
+        PathFindFileNameW(destination));
+    if (MessageBoxW(g.main, message, APP_NAME,
+                    MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES)
+        return FALSE;
+    wchar_t backup[MAX_PATH * 4];
+    if (!make_history_temporary_path(L".png", backup, _countof(backup))) {
+        show_error(L"Goldens could not reserve recoverable undo storage for the PNG being replaced.");
+        return FALSE;
+    }
+    if (!move_two_resource_pairs(destination, backup, source, destination))
+        return FALSE;
+    GoldenHistoryEntry entry;
+    golden_history_entry_resource(&entry, GOLDEN_HISTORY_REPLACE_MOVE_PNG,
+                                  source, destination, backup);
+    entry.staged = TRUE;
+    golden_history_push_new(&g.history, &entry);
+    update_state_after_resource_move(GOLDEN_HISTORY_MOVE_PNG,
+                                     source, destination);
+    select_resource_after_refresh(destination);
+    return TRUE;
 }
 
 static void update_state_after_resource_move(GoldenHistoryKind kind,
@@ -1786,12 +1953,10 @@ static BOOL apply_resource_history(GoldenHistoryEntry *entry, BOOL undo) {
         }
         entry->staged = undo;
         if (undo && !_wcsicmp(g.image_path, entry->source)) {
-            clear_image();
-            g.image_path[0] = 0;
-            if (!parent_dir_for(entry->source, g.current_dir,
-                                _countof(g.current_dir))) return FALSE;
-            SetWindowTextW(g.main, APP_NAME);
-            update_context_label();
+            wchar_t parent[MAX_PATH * 4];
+            if (!parent_dir_for(entry->source, parent, _countof(parent)))
+                return FALSE;
+            clear_active_resource(parent);
         } else if (!undo) {
             clear_preview();
             if (!load_png(entry->source)) {
@@ -1804,6 +1969,7 @@ static BOOL apply_resource_history(GoldenHistoryEntry *entry, BOOL undo) {
                                   _countof(g.image_path)) ||
                 !parent_dir_for(entry->source, g.current_dir,
                                 _countof(g.current_dir))) return FALSE;
+            load_annotations(entry->source);
             update_title_for_active_resource();
         }
         select_resource_after_refresh(undo ? g.current_dir : entry->source);
@@ -1830,6 +1996,50 @@ static BOOL apply_resource_history(GoldenHistoryEntry *entry, BOOL undo) {
             InvalidateRect(g.editor, NULL, FALSE);
         }
         select_resource_after_refresh(entry->source);
+        return TRUE;
+    }
+
+    if (entry->kind == GOLDEN_HISTORY_DELETE_PNG) {
+        const wchar_t *source = undo ? entry->destination : entry->source;
+        const wchar_t *destination = undo ? entry->source : entry->destination;
+        GoldenResourceRenameResult result = move_resource_pair(source, destination);
+        if (result != GOLDEN_RENAME_OK) {
+            show_error(resource_pair_error(result));
+            return FALSE;
+        }
+        entry->staged = !undo;
+        if (undo) {
+            if (!g.image_path[0] && !load_resource(entry->source)) {
+                show_error(L"The deleted PNG was restored but could not be opened.");
+                select_resource_after_refresh(entry->source);
+                return TRUE;
+            }
+            select_resource_after_refresh(entry->source);
+        } else {
+            wchar_t parent[MAX_PATH * 4];
+            if (!parent_dir_for(entry->source, parent, _countof(parent)))
+                parent[0] = 0;
+            if (!_wcsicmp(g.image_path, entry->source))
+                clear_active_resource(parent[0] ? parent : NULL);
+            select_resource_after_refresh(parent[0] ? parent : g.root);
+        }
+        return TRUE;
+    }
+
+    if (entry->kind == GOLDEN_HISTORY_REPLACE_MOVE_PNG) {
+        BOOL moved = undo ? move_two_resource_pairs(
+            entry->destination, entry->source,
+            entry->auxiliary, entry->destination) :
+            move_two_resource_pairs(
+                entry->destination, entry->auxiliary,
+                entry->source, entry->destination);
+        if (!moved) return FALSE;
+        entry->staged = !undo;
+        const wchar_t *source = undo ? entry->destination : entry->source;
+        const wchar_t *destination = undo ? entry->source : entry->destination;
+        update_state_after_resource_move(GOLDEN_HISTORY_MOVE_PNG,
+                                         source, destination);
+        select_resource_after_refresh(destination);
         return TRUE;
     }
 
@@ -1926,6 +2136,8 @@ static BOOL move_resource_to_directory(ResourceTreeNode *source,
     if (source->kind == RESOURCE_PNG) {
         GoldenResourceRenameResult result =
             move_resource_pair(source->path, new_path);
+        if (result == GOLDEN_RENAME_PNG_EXISTS)
+            return replace_resource_after_confirmation(source->path, new_path);
         if (result != GOLDEN_RENAME_OK) {
             show_error(resource_pair_error(result));
             return FALSE;
@@ -1972,6 +2184,8 @@ static BOOL rename_resource_file(const wchar_t *old_path, const wchar_t *edited_
     if (!wcscmp(old_path, new_path)) return TRUE;
 
     GoldenResourceRenameResult result = move_resource_pair(old_path, new_path);
+    if (result == GOLDEN_RENAME_PNG_EXISTS)
+        return replace_resource_after_confirmation(old_path, new_path);
     if (result != GOLDEN_RENAME_OK) {
         show_error(resource_pair_error(result));
         return FALSE;
@@ -2082,6 +2296,172 @@ static BOOL make_history_temporary_path(const wchar_t *extension,
             GetLastError() != ERROR_ALREADY_EXISTS) return FALSE;
     }
     return FALSE;
+}
+
+static BOOL resource_pair_path_available(const wchar_t *png_path) {
+    wchar_t json_path[MAX_PATH * 4];
+    return png_path &&
+        GetFileAttributesW(png_path) == INVALID_FILE_ATTRIBUTES &&
+        golden_resource_json_path(png_path, json_path, _countof(json_path)) &&
+        GetFileAttributesW(json_path) == INVALID_FILE_ATTRIBUTES;
+}
+
+static BOOL make_unique_copy_path(const wchar_t *source,
+                                  const wchar_t *directory,
+                                  wchar_t *destination, size_t capacity) {
+    wchar_t stem[256];
+    const wchar_t *filename = PathFindFileNameW(source);
+    wcsncpy(stem, filename, _countof(stem) - 1);
+    stem[_countof(stem) - 1] = 0;
+    if (ends_with_png(stem)) stem[wcslen(stem) - 4] = 0;
+    for (int index = 0; index < 10000; ++index) {
+        wchar_t candidate[256], suffix[32];
+        int suffix_length = 0;
+        suffix[0] = 0;
+        if (index > 0)
+            suffix_length = _snwprintf(suffix, _countof(suffix),
+                                       L"-%d", index);
+        if (suffix_length < 0 || (size_t)suffix_length >= _countof(suffix))
+            return FALSE;
+        size_t stem_length = wcslen(stem);
+        size_t maximum_stem = 251u - (size_t)suffix_length;
+        if (stem_length > maximum_stem) stem_length = maximum_stem;
+        int length = _snwprintf(candidate, _countof(candidate), L"%.*s%s",
+                                (int)stem_length, stem, suffix);
+        if (length < 0 || (size_t)length >= _countof(candidate)) continue;
+        if (!golden_path_join_extension(directory, candidate, L".png",
+                                        destination, capacity)) return FALSE;
+        if (resource_pair_path_available(destination)) return TRUE;
+    }
+    return FALSE;
+}
+
+static void record_created_png(const wchar_t *path,
+                               const wchar_t *staged_path) {
+    GoldenHistoryEntry entry;
+    golden_history_entry_resource(&entry, GOLDEN_HISTORY_CREATE_PNG,
+                                  path, staged_path, NULL);
+    golden_history_push_new(&g.history, &entry);
+    wchar_t parent[MAX_PATH * 4];
+    if (parent_dir_for(path, parent, _countof(parent)))
+        refresh_resources_expanding(parent);
+    else
+        refresh_resources();
+    if (load_resource(path)) {
+        HTREEITEM item = find_resource_item(TreeView_GetRoot(g.tree), path);
+        if (item) {
+            g.rebuilding_resources = TRUE;
+            TreeView_EnsureVisible(g.tree, item);
+            TreeView_SelectItem(g.tree, item);
+            g.rebuilding_resources = FALSE;
+        }
+    }
+}
+
+static void delete_selected_resource(void) {
+    ResourceTreeNode *node = selected_tree_node();
+    if (!node || node->kind != RESOURCE_PNG || !node->path) return;
+    wchar_t source[MAX_PATH * 4], parent[MAX_PATH * 4], staged[MAX_PATH * 4];
+    if (!golden_path_copy(node->path, source, _countof(source)) ||
+        !parent_dir_for(source, parent, _countof(parent))) {
+        show_error(L"The selected resource path is too long.");
+        return;
+    }
+    if (!_wcsicmp(source, g.image_path) && !maybe_save()) return;
+    if (!make_history_temporary_path(L".png", staged, _countof(staged))) {
+        show_error(L"Goldens could not reserve recoverable undo storage for the deletion.");
+        return;
+    }
+    GoldenResourceRenameResult result = move_resource_pair(source, staged);
+    if (result != GOLDEN_RENAME_OK) {
+        show_error(resource_pair_error(result));
+        return;
+    }
+    if (!_wcsicmp(source, g.image_path)) {
+        golden_history_remove_annotations(&g.history);
+        clear_active_resource(parent);
+    }
+    GoldenHistoryEntry entry;
+    golden_history_entry_resource(&entry, GOLDEN_HISTORY_DELETE_PNG,
+                                  source, staged, NULL);
+    entry.staged = TRUE;
+    golden_history_push_new(&g.history, &entry);
+    select_resource_after_refresh(parent);
+}
+
+static void copy_image_to_clipboard(void) {
+    BYTE *pixels = active_pixels();
+    if (!pixels || !active_width() || !active_height() || !active_stride()) return;
+    const wchar_t *path = !g.preview_mode && g.resource_visible && g.image_path[0] ?
+                          g.image_path : NULL;
+    if (!golden_clipboard_copy_image(g.main, pixels, active_width(),
+                                     active_height(), active_stride(), path))
+        show_error(L"Windows could not copy the image to the clipboard.");
+    update_menu_availability();
+}
+
+static void paste_image_from_clipboard(void) {
+    const wchar_t *directory = selected_directory_path();
+    DWORD attributes = directory ? GetFileAttributesW(directory) :
+                                   INVALID_FILE_ATTRIBUTES;
+    if (!directory || attributes == INVALID_FILE_ATTRIBUTES ||
+        !(attributes & FILE_ATTRIBUTE_DIRECTORY)) {
+        show_error(L"Select an available resource directory before pasting.");
+        return;
+    }
+    if (!maybe_save()) return;
+    GoldenImage image = {0};
+    wchar_t source[MAX_PATH * 4], destination[MAX_PATH * 4];
+    GoldenClipboardContent content = golden_clipboard_read_image(
+        g.main, &image, source, _countof(source));
+    if (content == GOLDEN_CLIPBOARD_NONE) {
+        show_error(L"The clipboard does not contain a supported image.");
+        return;
+    }
+    wchar_t staged[MAX_PATH * 4];
+    if (!make_history_temporary_path(L".png", staged, _countof(staged))) {
+        golden_image_free(&image);
+        show_error(L"Goldens could not reserve recoverable undo storage for the pasted image.");
+        return;
+    }
+    BOOL created = FALSE;
+    if (content == GOLDEN_CLIPBOARD_PNG_PATH) {
+        GoldenImage validated = {0};
+        if (!golden_png_load(g.wic, source, &validated)) {
+            show_error(L"The PNG on the clipboard could not be decoded.");
+        } else if (!make_unique_copy_path(source, directory, destination,
+                                          _countof(destination))) {
+            show_error(L"Goldens could not find an available name for the pasted PNG.");
+        } else if (!golden_copy_resource_pair(source, destination)) {
+            show_error(L"Windows could not copy the PNG and its JSON sidecar.");
+        } else {
+            created = TRUE;
+        }
+        golden_image_free(&validated);
+    } else {
+        wchar_t name[256] = L"pasted-image";
+        if (prompt_text(g.main, L"Paste image",
+                        L"Resource name (without .png):", name,
+                        _countof(name))) {
+            normalize_capture_name(name);
+            if (!valid_resource_name(name)) {
+                show_error(L"Enter a valid Windows resource name.");
+            } else if (!golden_path_join_extension(directory, name, L".png",
+                                                   destination,
+                                                   _countof(destination))) {
+                show_error(L"The pasted resource path is too long.");
+            } else if (!resource_pair_path_available(destination)) {
+                show_error(L"A PNG or JSON sidecar with that name already exists.");
+            } else if (!save_png_pixels(destination, image.pixels, image.width,
+                                        image.height, image.stride)) {
+                show_error(L"Goldens could not save the pasted image.");
+            } else {
+                created = TRUE;
+            }
+        }
+    }
+    golden_image_free(&image);
+    if (created) record_created_png(destination, staged);
 }
 
 static void capture_new(void) {
@@ -2475,6 +2855,18 @@ static void handle_command(int id) {
     case ID_EXIT: SendMessageW(g.main, WM_CLOSE, 0, 0); break;
     case ID_UNDO: undo_action(); break;
     case ID_REDO: redo_action(); break;
+    case ID_COPY: {
+        HWND edit = TreeView_GetEditControl(g.tree);
+        if (edit && GetFocus() == edit) SendMessageW(edit, WM_COPY, 0, 0);
+        else copy_image_to_clipboard();
+        break;
+    }
+    case ID_PASTE: {
+        HWND edit = TreeView_GetEditControl(g.tree);
+        if (edit && GetFocus() == edit) SendMessageW(edit, WM_PASTE, 0, 0);
+        else paste_image_from_clipboard();
+        break;
+    }
     case ID_RENAME: {
         if (!tree_rename_available()) break;
         HWND focus = GetFocus();
@@ -2483,7 +2875,14 @@ static void handle_command(int id) {
         rename_selected();
         break;
     }
-    case ID_DELETE: if (annotation_action_available()) delete_selected(); break;
+    case ID_DELETE: {
+        HWND edit = TreeView_GetEditControl(g.tree);
+        if (edit && GetFocus() == edit)
+            SendMessageW(edit, WM_KEYDOWN, VK_DELETE, 0);
+        else if (resource_delete_available()) delete_selected_resource();
+        else if (annotation_action_available()) delete_selected();
+        break;
+    }
     case ID_CLEAR_CLICK: if (click_clear_available()) clear_click(); break;
     case ID_FIT:
         if (active_pixels()) {
@@ -2525,6 +2924,9 @@ static HMENU create_main_menu(void) {
     AppendMenuW(file, MF_STRING, ID_EXIT, L"Exit");
     AppendMenuW(edit, MF_STRING, ID_UNDO, L"Undo\tCtrl+Z");
     AppendMenuW(edit, MF_STRING, ID_REDO, L"Redo\tCtrl+Y");
+    AppendMenuW(edit, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(edit, MF_STRING, ID_COPY, L"Copy Image\tCtrl+C");
+    AppendMenuW(edit, MF_STRING, ID_PASTE, L"Paste Image\tCtrl+V");
     AppendMenuW(edit, MF_SEPARATOR, 0, NULL);
     AppendMenuW(edit, MF_STRING, ID_RENAME, L"Rename Selection\tF2");
     AppendMenuW(edit, MF_STRING, ID_DELETE, L"Delete Annotation\tDel");
@@ -2679,6 +3081,7 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         update_status();
         refresh_windows();
         update_capture_availability();
+        AddClipboardFormatListener(hwnd);
         SetTimer(hwnd, WINDOW_TIMER, 750, NULL);
         SetTimer(hwnd, PREVIEW_TIMER, PREVIEW_INTERVAL_MS, NULL);
         return 0;
@@ -2752,10 +3155,14 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (completion == GOLDEN_PREVIEW_COMPLETION_ACCEPTED)
                 ++g.image_revision;
             g.preview_loading = FALSE;
+            update_menu_availability();
             InvalidateRect(g.editor, NULL, FALSE);
         }
         return 0;
     }
+    case WM_CLIPBOARDUPDATE:
+        update_menu_availability();
+        return 0;
     case WM_RESOURCES_CHANGED: {
         refresh_resources();
         if (g.pending_resource_selection[0]) {
@@ -2907,6 +3314,7 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (maybe_save()) DestroyWindow(hwnd);
         return 0;
     case WM_DESTROY:
+        RemoveClipboardFormatListener(hwnd);
         KillTimer(hwnd, WINDOW_TIMER);
         KillTimer(hwnd, PREVIEW_TIMER);
         if (g.editor_tooltip) {
@@ -2980,6 +3388,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR command_line, 
         {FVIRTKEY | FCONTROL, 'N', ID_NEW_FOLDER},
         {FVIRTKEY | FCONTROL, 'S', ID_SAVE},
         {FVIRTKEY | FCONTROL, 'Z', ID_UNDO}, {FVIRTKEY | FCONTROL, 'Y', ID_REDO},
+        {FVIRTKEY | FCONTROL, 'C', ID_COPY}, {FVIRTKEY | FCONTROL, 'V', ID_PASTE},
         {FVIRTKEY, VK_F5, ID_REFRESH}, {FVIRTKEY, VK_F2, ID_RENAME},
         {FVIRTKEY, VK_DELETE, ID_DELETE},
         {FVIRTKEY | FCONTROL, VK_OEM_MINUS, ID_ZOOM_OUT},
@@ -2990,7 +3399,15 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR command_line, 
     HACCEL accelerators = CreateAcceleratorTableW(shortcuts, _countof(shortcuts));
     MSG msg;
     while (GetMessageW(&msg, NULL, 0, 0) > 0) {
-        if (!TranslateAcceleratorW(g.main, accelerators, &msg)) {
+        HWND tree_edit = TreeView_GetEditControl(g.tree);
+        BOOL editing_shortcut = tree_edit && msg.hwnd == tree_edit &&
+            msg.message == WM_KEYDOWN &&
+            (msg.wParam == VK_DELETE ||
+             (GetKeyState(VK_CONTROL) < 0 &&
+              (msg.wParam == 'C' || msg.wParam == 'V' ||
+               msg.wParam == 'Z' || msg.wParam == 'Y')));
+        if (editing_shortcut ||
+            !TranslateAcceleratorW(g.main, accelerators, &msg)) {
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }

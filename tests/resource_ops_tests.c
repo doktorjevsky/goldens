@@ -27,6 +27,16 @@ static char *read_bytes(const wchar_t *path, size_t *length) {
     return data;
 }
 
+static int file_equals(const wchar_t *path, const char *expected,
+                       size_t expected_length) {
+    size_t length = 0;
+    char *data = read_bytes(path, &length);
+    int equal = data && length == expected_length &&
+                !memcmp(data, expected, expected_length);
+    free(data);
+    return equal;
+}
+
 typedef struct {
     int calls;
     unsigned failures;
@@ -192,6 +202,93 @@ static int test_resource_pair_move_undo_redo(const wchar_t *directory) {
     return failed;
 }
 
+static int test_resource_pair_copy(const wchar_t *directory) {
+    wchar_t source_png[MAX_PATH], destination_png[MAX_PATH];
+    wchar_t source_json[MAX_PATH], destination_json[MAX_PATH];
+    if (!make_pair(directory, L"copy", source_png, destination_png,
+                   source_json, destination_json)) return 1;
+    int failed = !golden_copy_resource_pair(source_png, destination_png) ||
+        GetFileAttributesW(source_png) == INVALID_FILE_ATTRIBUTES ||
+        GetFileAttributesW(source_json) == INVALID_FILE_ATTRIBUTES ||
+        GetFileAttributesW(destination_png) == INVALID_FILE_ATTRIBUTES ||
+        GetFileAttributesW(destination_json) == INVALID_FILE_ATTRIBUTES;
+    size_t png_length = 0, json_length = 0;
+    char *png = failed ? NULL : read_bytes(destination_png, &png_length);
+    char *json = failed ? NULL : read_bytes(destination_json, &json_length);
+    if (!failed) failed = !png || png_length != 3 || memcmp(png, "png", 3) ||
+                          !json || json_length != 4 || memcmp(json, "json", 4) ||
+                          golden_copy_resource_pair(source_png, destination_png);
+    free(png); free(json);
+    DeleteFileW(source_png); DeleteFileW(source_json);
+    DeleteFileW(destination_png); DeleteFileW(destination_json);
+    return failed;
+}
+
+static int test_resource_pair_copy_rolls_back(const wchar_t *directory) {
+    wchar_t source_png[MAX_PATH], destination_png[MAX_PATH];
+    wchar_t source_json[MAX_PATH], destination_json[MAX_PATH];
+    _snwprintf(source_png, _countof(source_png),
+               L"%s\\copy-rollback-before.png", directory);
+    _snwprintf(destination_png, _countof(destination_png),
+               L"%s\\copy-rollback-after.png", directory);
+    if (!golden_resource_json_path(source_png, source_json,
+                                   _countof(source_json)) ||
+        !golden_resource_json_path(destination_png, destination_json,
+                                   _countof(destination_json)) ||
+        !write_bytes(source_png, "png", 3) ||
+        !CreateDirectoryW(source_json, NULL)) return 1;
+    int failed = golden_copy_resource_pair(source_png, destination_png) ||
+        GetFileAttributesW(source_png) == INVALID_FILE_ATTRIBUTES ||
+        GetFileAttributesW(destination_png) != INVALID_FILE_ATTRIBUTES ||
+        GetFileAttributesW(destination_json) != INVALID_FILE_ATTRIBUTES;
+    DeleteFileW(source_png); DeleteFileW(destination_png);
+    DeleteFileW(destination_json); RemoveDirectoryW(source_json);
+    return failed;
+}
+
+static int test_resource_pair_replace_undo_redo(const wchar_t *directory) {
+    wchar_t source_png[MAX_PATH], destination_png[MAX_PATH], backup_png[MAX_PATH];
+    wchar_t source_json[MAX_PATH], destination_json[MAX_PATH], backup_json[MAX_PATH];
+    _snwprintf(source_png, _countof(source_png), L"%s\\replace-source.png", directory);
+    _snwprintf(destination_png, _countof(destination_png),
+               L"%s\\replace-destination.png", directory);
+    _snwprintf(backup_png, _countof(backup_png), L"%s\\replace-backup.png", directory);
+    if (!golden_resource_json_path(source_png, source_json, _countof(source_json)) ||
+        !golden_resource_json_path(destination_png, destination_json,
+                                   _countof(destination_json)) ||
+        !golden_resource_json_path(backup_png, backup_json, _countof(backup_json)) ||
+        !write_bytes(source_png, "source-png", 10) ||
+        !write_bytes(source_json, "source-json", 11) ||
+        !write_bytes(destination_png, "destination-png", 15) ||
+        !write_bytes(destination_json, "destination-json", 16)) return 1;
+
+    int failed = golden_rename_resource_pair(destination_png, backup_png) !=
+                     GOLDEN_RENAME_OK ||
+        golden_rename_resource_pair(source_png, destination_png) != GOLDEN_RENAME_OK ||
+        !file_equals(destination_png, "source-png", 10) ||
+        !file_equals(destination_json, "source-json", 11) ||
+        !file_equals(backup_png, "destination-png", 15) ||
+        !file_equals(backup_json, "destination-json", 16);
+    if (!failed) failed =
+        golden_rename_resource_pair(destination_png, source_png) != GOLDEN_RENAME_OK ||
+        golden_rename_resource_pair(backup_png, destination_png) != GOLDEN_RENAME_OK ||
+        !file_equals(source_png, "source-png", 10) ||
+        !file_equals(source_json, "source-json", 11) ||
+        !file_equals(destination_png, "destination-png", 15) ||
+        !file_equals(destination_json, "destination-json", 16);
+    if (!failed) failed =
+        golden_rename_resource_pair(destination_png, backup_png) != GOLDEN_RENAME_OK ||
+        golden_rename_resource_pair(source_png, destination_png) != GOLDEN_RENAME_OK ||
+        !file_equals(destination_png, "source-png", 10) ||
+        !file_equals(destination_json, "source-json", 11) ||
+        !file_equals(backup_png, "destination-png", 15) ||
+        !file_equals(backup_json, "destination-json", 16);
+    DeleteFileW(source_png); DeleteFileW(source_json);
+    DeleteFileW(destination_png); DeleteFileW(destination_json);
+    DeleteFileW(backup_png); DeleteFileW(backup_json);
+    return failed;
+}
+
 static int test_directory_move(const wchar_t *directory) {
     wchar_t source[MAX_PATH], destination[MAX_PATH], child[MAX_PATH];
     _snwprintf(source, _countof(source), L"%s\\folder-before", directory);
@@ -315,6 +412,9 @@ int main(void) {
     if (!failed) failed = test_first_move_failure_is_reported(directory);
     if (!failed) failed = test_orphan_destination_json_blocks_png_move(directory);
     if (!failed) failed = test_resource_pair_move_undo_redo(directory);
+    if (!failed) failed = test_resource_pair_copy(directory);
+    if (!failed) failed = test_resource_pair_copy_rolls_back(directory);
+    if (!failed) failed = test_resource_pair_replace_undo_redo(directory);
     if (!failed) failed = test_directory_move(directory);
     if (!failed) failed = test_directory_create_undo_redo(directory);
     if (!failed) failed = test_directory_move_rejects_descendant(directory);

@@ -71,10 +71,22 @@ destination to the corresponding directory.
   the selected resource directory. F2 also renames non-root folders. Drag PNGs
   and folders onto a directory to move them within the open resource root;
   annotation rows cannot be dragged. PNG moves keep the same-stem JSON sidecar
-  attached. A persistent transaction journal completes or rolls back an
+  attached. If a move or rename would replace a PNG, Goldens asks first with
+  **No** as the default; accepting replaces its sidecar too, and **Ctrl+Z**
+  restores both the moved resource and the replaced pair. Delete removes a
+  selected PNG and its sidecar together; **Ctrl+Z**
+  restores both, and **Ctrl+Y** deletes them again. **Ctrl+C** copies the
+  displayed image to the Windows clipboard. When it is a PNG resource, pasting
+  it with **Ctrl+V** duplicates the PNG and sidecar under an available name;
+  clashes are indexed as `name-1.png`, `name-2.png`, and so on. Bitmap
+  images copied from other applications can also be pasted as new named PNG
+  resources. Resource-folder expansion is preserved across refreshes, and the
+  paste destination opens automatically. Pasted resources participate in
+  undo/redo like new captures.
+  A persistent transaction journal completes or rolls back an
   interrupted pair move on refresh or next startup, including the case where
   Windows could not perform the immediate PNG rollback. Moves never
-  merge folders or overwrite an existing PNG, folder, or JSON sidecar. Folder
+  merge folders or silently overwrite an existing PNG, folder, or JSON sidecar. Folder
   creation, capture/recapture, and PNG/folder moves or renames join annotation edits in the ordered
   **Ctrl+Z**/**Ctrl+Y** undo history. An undo blocked by an externally created
   collision or a now-nonempty folder remains retryable after the conflict is fixed.
@@ -136,7 +148,7 @@ live top-level window lifecycle reconciliation (including minimized windows),
 exact 1:1 GDI rendering, overlay ordering, custom and collapsed column layouts
 from compact to wide and 100–200% DPI, version-compatible native tooltip
 registration and positioning, DPI-scaled tool icon rasterization, transactional
-PNG/JSON rename and move undo/redo round trips including persistent-journal
+PNG/JSON copy and rename/move undo/redo round trips including persistent-journal
 recovery after rollback failure, mixed ring-buffer history ordering, branching,
 capacity eviction, failed-action retry, and saved-state comparison,
 folder create/move undo/redo round trips and subtree rejection, orphan-sidecar

@@ -151,6 +151,26 @@ static BOOL path_exists(const wchar_t *path) {
     return GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES;
 }
 
+BOOL golden_copy_resource_pair(const wchar_t *source_png,
+                               const wchar_t *destination_png) {
+    wchar_t source_json[MAX_PATH * 4], destination_json[MAX_PATH * 4];
+    if (!source_png || !destination_png || !path_exists(source_png) ||
+        path_exists(destination_png) ||
+        !golden_resource_json_path(source_png, source_json,
+                                   _countof(source_json)) ||
+        !golden_resource_json_path(destination_png, destination_json,
+                                   _countof(destination_json)) ||
+        path_exists(destination_json) ||
+        !golden_atomic_copy_file(source_png, destination_png)) return FALSE;
+    if (path_exists(source_json) &&
+        !golden_atomic_copy_file(source_json, destination_json)) {
+        DeleteFileW(destination_png);
+        DeleteFileW(destination_json);
+        return FALSE;
+    }
+    return TRUE;
+}
+
 GoldenResourceRenameResult golden_rename_resource_pair_transactional_with_move(
     const wchar_t *old_png, const wchar_t *new_png,
     const wchar_t *journal_path,
