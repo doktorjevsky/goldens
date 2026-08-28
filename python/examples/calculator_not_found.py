@@ -17,12 +17,12 @@ def main() -> None:
         timeout=5.0,
     )
     calculator.focus(timeout=2.0)
-    targets = Goldens(Path(__file__).with_name("calculator.png"))
+    targets = Goldens.from_png(Path(__file__).with_name("calculator.png"))
 
     # The not_found crop represents Calculator before its display changes.
     # Pressing a nonzero digit makes that visual state disappear.
     pressed = calculator.click_target(
-        targets["button_7"],
+        targets["calculator/button_7"],
         threshold=0.92,
         timeout=2.0,
     )
@@ -30,7 +30,7 @@ def main() -> None:
 
     try:
         calculator.find_target(
-            targets["not_found"],
+            targets["calculator/not_found"],
             threshold=0.92,
             timeout=2.0,
         )
