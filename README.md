@@ -118,9 +118,11 @@ destination to the corresponding directory.
   owns the global shortcut, Goldens turns listening off and explains why.
   Goldens does not change focus before capture, so menus, dropdowns, and hover
   state remain intact. The capture is stored directly in the selected resource
-  directory as `image.png` with an empty matching annotation sidecar; when that
-  name is occupied, Goldens adds a numeric suffix. The new image is opened,
-  selected in the resource tree, and placed into inline rename mode.
+  directory, or in the open resource root when nothing is selected, as
+  `image.png` with an empty matching annotation sidecar; when that name is
+  occupied, Goldens adds a numeric suffix. The new image is opened, selected in
+  the resource tree, and its selected filename receives keyboard focus in
+  inline rename mode so typing replaces it immediately.
 - Use **Fit**, **−**, **+**, or the mouse wheel to control zoom. Wheel zoom keeps
   the image point beneath the mouse pointer in place. **View → Actual
   Size** (or **1**) switches to 100%. With Select, drag an image background or

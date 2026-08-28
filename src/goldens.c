@@ -2212,9 +2212,11 @@ static BOOL begin_tree_rename(HTREEITEM item) {
         update_tool_availability();
         InvalidateRect(g.editor, NULL, FALSE);
     }
+    SetFocus(g.tree);
     TreeView_SelectItem(g.tree, item);
     HWND edit = TreeView_EditLabel(g.tree, item);
     if (edit) {
+        SetFocus(edit);
         SendMessageW(edit, EM_LIMITTEXT,
             node->kind == RESOURCE_ANNOTATION ? 127 : 255, 0);
         SendMessageW(edit, EM_SETSEL, 0, -1);
@@ -2590,6 +2592,7 @@ static void capture_foreground_scene(void) {
     if (!foreground || foreground == g.main) return;
 
     const wchar_t *selected_directory = selected_directory_path();
+    if (!selected_directory && g.root[0]) selected_directory = g.root;
     wchar_t directory[MAX_PATH * 4];
     DWORD attributes = selected_directory ?
         GetFileAttributesW(selected_directory) : INVALID_FILE_ATTRIBUTES;
@@ -2599,7 +2602,7 @@ static void capture_foreground_scene(void) {
                           _countof(directory))) {
         ShowWindow(g.main, SW_RESTORE);
         SetForegroundWindow(g.main);
-        show_error(L"Open or select an available resource folder before pressing F8.");
+        show_error(L"Open an available resource root before pressing F8.");
         return;
     }
 
