@@ -6,7 +6,6 @@
 #include <stddef.h>
 
 #define MAX_ANNOTATIONS 256
-#define MAX_WINDOWS 512
 
 typedef struct {
     wchar_t name[128];
@@ -15,12 +14,6 @@ typedef struct {
     double click_x;
     double click_y;
 } Annotation;
-
-typedef struct {
-    UINT_PTR id;
-    wchar_t app[128];
-    wchar_t title[256];
-} GoldenWindowInfo;
 
 typedef struct {
     RECT destination;
@@ -42,7 +35,4 @@ POINT golden_zoom_anchor_pan(const GoldenViewport *current,
                              POINT client_anchor);
 BOOL golden_view_to_image(const GoldenViewport *viewport, POINT client,
                           int image_width, int image_height, POINT *image);
-BOOL golden_window_lists_equal(const GoldenWindowInfo *left, int left_count,
-                               const GoldenWindowInfo *right, int right_count);
-
 #endif
