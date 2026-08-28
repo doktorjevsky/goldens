@@ -61,5 +61,6 @@ GoldenDirectoryMoveResult golden_move_directory(const wchar_t *source,
 GoldenDirectoryMoveResult golden_move_directory_with_move(
     const wchar_t *source, const wchar_t *destination,
     GoldenMoveFileOperation move_file, void *context);
+BOOL golden_delete_directory_tree(const wchar_t *path);
 
 #endif

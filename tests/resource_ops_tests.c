@@ -369,6 +369,54 @@ static int test_directory_create_undo_redo(const wchar_t *directory) {
     return failed;
 }
 
+static int test_directory_delete_undo_redo(const wchar_t *directory) {
+    wchar_t source[MAX_PATH], staged[MAX_PATH], nested[MAX_PATH];
+    wchar_t source_png[MAX_PATH], staged_png[MAX_PATH];
+    wchar_t source_note[MAX_PATH], staged_note[MAX_PATH];
+    _snwprintf(source, _countof(source), L"%s\\delete-source", directory);
+    _snwprintf(staged, _countof(staged), L"%s\\delete-staged", directory);
+    _snwprintf(nested, _countof(nested), L"%s\\nested", source);
+    _snwprintf(source_png, _countof(source_png),
+               L"%s\\nested\\inside.png", source);
+    _snwprintf(staged_png, _countof(staged_png),
+               L"%s\\nested\\inside.png", staged);
+    _snwprintf(source_note, _countof(source_note), L"%s\\note.txt", source);
+    _snwprintf(staged_note, _countof(staged_note), L"%s\\note.txt", staged);
+    int failed = !CreateDirectoryW(source, NULL) ||
+        !CreateDirectoryW(nested, NULL) ||
+        !write_bytes(source_png, "png", 3) ||
+        !write_bytes(source_note, "readonly", 8) ||
+        !SetFileAttributesW(source_note, FILE_ATTRIBUTE_READONLY);
+    if (!failed) {
+        failed = golden_move_directory(source, staged) !=
+                     GOLDEN_DIRECTORY_MOVE_OK ||
+                 GetFileAttributesW(source) != INVALID_FILE_ATTRIBUTES ||
+                 !file_equals(staged_png, "png", 3) ||
+                 !file_equals(staged_note, "readonly", 8);
+    }
+    if (!failed) {
+        failed = !CreateDirectoryW(source, NULL) ||
+            golden_move_directory(staged, source) !=
+                GOLDEN_DIRECTORY_MOVE_DESTINATION_EXISTS ||
+            GetFileAttributesW(staged_png) == INVALID_FILE_ATTRIBUTES ||
+            !RemoveDirectoryW(source);
+    }
+    if (!failed) {
+        failed = golden_move_directory(staged, source) !=
+                     GOLDEN_DIRECTORY_MOVE_OK ||
+                 !file_equals(source_png, "png", 3) ||
+                 !file_equals(source_note, "readonly", 8) ||
+                 golden_move_directory(source, staged) !=
+                     GOLDEN_DIRECTORY_MOVE_OK ||
+                 !golden_delete_directory_tree(staged) ||
+                 GetFileAttributesW(staged) != INVALID_FILE_ATTRIBUTES ||
+                 !golden_delete_directory_tree(staged);
+    }
+    golden_delete_directory_tree(source);
+    golden_delete_directory_tree(staged);
+    return failed;
+}
+
 static int test_directory_move_rejects_descendant(const wchar_t *directory) {
     wchar_t source[MAX_PATH], destination[MAX_PATH];
     _snwprintf(source, _countof(source), L"%s\\parent", directory);
@@ -455,6 +503,7 @@ int main(void) {
     if (!failed) failed = test_resource_pair_replace_undo_redo(directory);
     if (!failed) failed = test_directory_move(directory);
     if (!failed) failed = test_directory_create_undo_redo(directory);
+    if (!failed) failed = test_directory_delete_undo_redo(directory);
     if (!failed) failed = test_directory_move_rejects_descendant(directory);
     if (!failed) failed = test_directory_move_failure_preserves_source(directory);
 
@@ -462,6 +511,6 @@ int main(void) {
     DeleteFileW(new_png); DeleteFileW(new_json); DeleteFileW(collision_png);
     RemoveDirectoryW(directory);
     if (failed) return 1;
-    puts("All Goldens resource rename tests passed.");
+    puts("All Goldens resource operation tests passed.");
     return 0;
 }

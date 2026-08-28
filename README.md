@@ -74,8 +74,9 @@ destination to the corresponding directory.
   attached. If a move or rename would replace a PNG, Goldens asks first with
   **No** as the default; accepting replaces its sidecar too, and **Ctrl+Z**
   restores both the moved resource and the replaced pair. Delete removes a
-  selected PNG and its sidecar together; **Ctrl+Z**
-  restores both, and **Ctrl+Y** deletes them again. **Ctrl+C** copies the
+  selected PNG and its sidecar together, or—after confirmation—a non-root
+  folder and its complete contents. **Ctrl+Z** restores the PNG pair or folder
+  tree, and **Ctrl+Y** deletes it again. **Ctrl+C** copies the
   displayed image to the Windows clipboard. When it is a PNG resource, pasting
   it with **Ctrl+V** duplicates the PNG and sidecar under an available name;
   clashes are indexed as `name-1.png`, `name-2.png`, and so on. Bitmap
@@ -163,7 +164,8 @@ registration and positioning, DPI-scaled tool icon rasterization, transactional
 PNG/JSON copy and rename/move undo/redo round trips including persistent-journal
 recovery after rollback failure, mixed ring-buffer history ordering, branching,
 capacity eviction, failed-action retry, and saved-state comparison,
-folder create/move undo/redo round trips and subtree rejection, orphan-sidecar
+folder create/move/delete undo/redo round trips, staged-tree cleanup and subtree
+rejection, orphan-sidecar
 collision safety, atomic-write failure preservation,
 lossless BGRA PNG encode/decode and replacement, and reusable preview capture
 surfaces with removal of invisible resize-border pixels from `PrintWindow`

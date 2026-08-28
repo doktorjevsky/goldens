@@ -281,3 +281,61 @@ GoldenDirectoryMoveResult golden_move_directory(const wchar_t *source,
     return golden_move_directory_with_move(source, destination,
                                            move_file, NULL);
 }
+
+static void clear_readonly_attribute(const wchar_t *path, DWORD attributes) {
+    if (!(attributes & FILE_ATTRIBUTE_READONLY)) return;
+    DWORD writable = attributes & ~(DWORD)FILE_ATTRIBUTE_READONLY;
+    if (writable == 0) writable = FILE_ATTRIBUTE_NORMAL;
+    SetFileAttributesW(path, writable);
+}
+
+BOOL golden_delete_directory_tree(const wchar_t *path) {
+    if (!path || !path[0]) return FALSE;
+    DWORD attributes = GetFileAttributesW(path);
+    if (attributes == INVALID_FILE_ATTRIBUTES) {
+        DWORD error = GetLastError();
+        return error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND;
+    }
+    if (!(attributes & FILE_ATTRIBUTE_DIRECTORY)) return FALSE;
+    if (attributes & FILE_ATTRIBUTE_REPARSE_POINT) {
+        clear_readonly_attribute(path, attributes);
+        return RemoveDirectoryW(path);
+    }
+
+    wchar_t pattern[MAX_PATH * 4];
+    if (!golden_path_join(path, L"*", pattern, _countof(pattern))) return FALSE;
+    WIN32_FIND_DATAW data;
+    HANDLE find = FindFirstFileW(pattern, &data);
+    BOOL success = TRUE;
+    if (find == INVALID_HANDLE_VALUE) {
+        DWORD error = GetLastError();
+        if (error != ERROR_FILE_NOT_FOUND) return FALSE;
+    } else {
+        do {
+            if (!wcscmp(data.cFileName, L".") ||
+                !wcscmp(data.cFileName, L"..")) continue;
+            wchar_t child[MAX_PATH * 4];
+            if (!golden_path_join(path, data.cFileName,
+                                  child, _countof(child))) {
+                success = FALSE;
+                continue;
+            }
+            if (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+                if (data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) {
+                    clear_readonly_attribute(child, data.dwFileAttributes);
+                    if (!RemoveDirectoryW(child)) success = FALSE;
+                } else if (!golden_delete_directory_tree(child)) {
+                    success = FALSE;
+                }
+            } else {
+                clear_readonly_attribute(child, data.dwFileAttributes);
+                if (!DeleteFileW(child)) success = FALSE;
+            }
+        } while (FindNextFileW(find, &data));
+        if (GetLastError() != ERROR_NO_MORE_FILES) success = FALSE;
+        FindClose(find);
+    }
+    if (!success) return FALSE;
+    clear_readonly_attribute(path, attributes);
+    return RemoveDirectoryW(path);
+}
