@@ -18,7 +18,7 @@
 #include "document.h"
 #include "image_io.h"
 #include "clipboard_image.h"
-#include "capture_bundle.h"
+#include "scene_capture.h"
 #include "editor_render.h"
 #include "ui_layout.h"
 #include "ui_tooltip.h"
@@ -188,7 +188,7 @@ static BOOL make_history_temporary_path(const wchar_t *extension,
 static void update_state_after_resource_move(GoldenHistoryKind kind,
                                              const wchar_t *source,
                                              const wchar_t *destination);
-static void capture_foreground_bundle(void);
+static void capture_foreground_scene(void);
 static void set_capture_hotkey_enabled(BOOL enabled, BOOL remember);
 
 static void show_error(const wchar_t *message) {
@@ -2212,9 +2212,11 @@ static BOOL begin_tree_rename(HTREEITEM item) {
         update_tool_availability();
         InvalidateRect(g.editor, NULL, FALSE);
     }
+    SetFocus(g.tree);
     TreeView_SelectItem(g.tree, item);
     HWND edit = TreeView_EditLabel(g.tree, item);
     if (edit) {
+        SetFocus(edit);
         SendMessageW(edit, EM_LIMITTEXT,
             node->kind == RESOURCE_ANNOTATION ? 127 : 255, 0);
         SendMessageW(edit, EM_SETSEL, 0, -1);
@@ -2547,35 +2549,19 @@ static void paste_image_from_clipboard(void) {
     if (created) record_created_png(destination, staged);
 }
 
-static const wchar_t *capture_bundle_error(
-    GoldenCaptureBundleStatus status) {
+static const wchar_t *scene_capture_error(GoldenSceneCaptureStatus status) {
     switch (status) {
-    case GOLDEN_CAPTURE_BUNDLE_DESTINATION_EXISTS:
-        return L"A file or folder with that bundle name already exists.";
-    case GOLDEN_CAPTURE_BUNDLE_CREATE_FAILED:
-        return L"Goldens could not create temporary storage for the capture bundle.";
-    case GOLDEN_CAPTURE_BUNDLE_NO_VISIBLE_WINDOWS:
+    case GOLDEN_SCENE_CAPTURE_DESTINATION_EXISTS:
+        return L"A PNG or annotation sidecar with that name already exists.";
+    case GOLDEN_SCENE_CAPTURE_NO_VISIBLE_WINDOWS:
         return L"Goldens could not find a visible foreground window to capture.";
-    case GOLDEN_CAPTURE_BUNDLE_SCREEN_CAPTURE_FAILED:
+    case GOLDEN_SCENE_CAPTURE_SCREEN_FAILED:
         return L"Windows could not capture the foreground application's visible scene.";
-    case GOLDEN_CAPTURE_BUNDLE_SAVE_FAILED:
-        return L"Goldens could not save every PNG and annotation sidecar in the bundle.";
-    case GOLDEN_CAPTURE_BUNDLE_MANIFEST_FAILED:
-        return L"Goldens captured the images but could not write the bundle manifest.";
-    case GOLDEN_CAPTURE_BUNDLE_FINALIZE_FAILED:
-        return L"Goldens captured the bundle but Windows could not move it into the selected folder.";
+    case GOLDEN_SCENE_CAPTURE_SAVE_FAILED:
+        return L"Goldens captured the scene but could not save its PNG and annotation sidecar.";
     default:
-        return L"Goldens could not create the capture bundle.";
+        return L"Goldens could not capture the foreground application's scene.";
     }
-}
-
-static void select_loaded_resource(const wchar_t *path) {
-    HTREEITEM item = find_resource_item(TreeView_GetRoot(g.tree), path);
-    if (!item) return;
-    g.rebuilding_resources = TRUE;
-    TreeView_EnsureVisible(g.tree, item);
-    TreeView_SelectItem(g.tree, item);
-    g.rebuilding_resources = FALSE;
 }
 
 static void set_capture_hotkey_enabled(BOOL enabled, BOOL remember) {
@@ -2600,79 +2586,13 @@ static void set_capture_hotkey_enabled(BOOL enabled, BOOL remember) {
     if (remember) remember_capture_hotkey_setting();
 }
 
-static BOOL make_pending_capture_path(const wchar_t *directory,
-                                      wchar_t *path, size_t capacity) {
-    static volatile LONG sequence;
-    for (int attempt = 0; attempt < 128; ++attempt) {
-        wchar_t leaf[96];
-        LONG value = InterlockedIncrement(&sequence);
-        int length = _snwprintf(
-            leaf, _countof(leaf), L".goldens-pending-%08lx-%08lx",
-            (unsigned long)GetCurrentProcessId(), (unsigned long)value);
-        if (length < 0 || (size_t)length >= _countof(leaf) ||
-            !golden_path_join(directory, leaf, path, capacity)) return FALSE;
-        if (GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES) return TRUE;
-    }
-    return FALSE;
-}
-
-static void discard_pending_capture(const wchar_t *path) {
-    if (golden_delete_directory_tree(path)) return;
-    SetFileAttributesW(path, FILE_ATTRIBUTE_NORMAL);
-    show_error(L"The capture was cancelled, but Goldens could not remove its temporary bundle.");
-}
-
-static BOOL publish_pending_capture(const wchar_t *directory,
-                                    const wchar_t *pending,
-                                    wchar_t *destination,
-                                    size_t capacity) {
-    wchar_t name[256] = L"Capture Bundle";
-    for (;;) {
-        if (!prompt_text(g.main, L"Save capture bundle", L"Bundle folder name:",
-                         name, _countof(name))) {
-            discard_pending_capture(pending);
-            return FALSE;
-        }
-        trim_text(name);
-        if (!valid_resource_name(name)) {
-            show_error(L"Enter a valid Windows folder name.");
-            continue;
-        }
-        if (!golden_path_join(directory, name, destination, capacity)) {
-            show_error(L"The capture bundle path is too long.");
-            continue;
-        }
-        wchar_t scene_path[MAX_PATH * 4];
-        if (!golden_path_join_extension(destination, L"scene", L".png",
-                                        scene_path, _countof(scene_path))) {
-            show_error(L"The capture bundle path is too long.");
-            continue;
-        }
-        if (GetFileAttributesW(destination) != INVALID_FILE_ATTRIBUTES) {
-            show_error(L"A file or folder with that bundle name already exists.");
-            continue;
-        }
-        if (MoveFileExW(pending, destination, MOVEFILE_WRITE_THROUGH)) {
-            SetFileAttributesW(destination, FILE_ATTRIBUTE_NORMAL);
-            return TRUE;
-        }
-        DWORD error = GetLastError();
-        if (error == ERROR_ALREADY_EXISTS || error == ERROR_FILE_EXISTS) {
-            show_error(L"A file or folder with that bundle name already exists.");
-            continue;
-        }
-        SetFileAttributesW(pending, FILE_ATTRIBUTE_NORMAL);
-        show_error(L"Windows could not name the captured bundle. The temporary bundle remains in the capture folder.");
-        return FALSE;
-    }
-}
-
-static void capture_foreground_bundle(void) {
+static void capture_foreground_scene(void) {
     if (!g.capture_hotkey_registered || g.capture_in_progress) return;
     HWND foreground = GetForegroundWindow();
     if (!foreground || foreground == g.main) return;
 
     const wchar_t *selected_directory = selected_directory_path();
+    if (!selected_directory && g.root[0]) selected_directory = g.root;
     wchar_t directory[MAX_PATH * 4];
     DWORD attributes = selected_directory ?
         GetFileAttributesW(selected_directory) : INVALID_FILE_ATTRIBUTES;
@@ -2682,49 +2602,41 @@ static void capture_foreground_bundle(void) {
                           _countof(directory))) {
         ShowWindow(g.main, SW_RESTORE);
         SetForegroundWindow(g.main);
-        show_error(L"Open or select an available resource folder before pressing F8.");
+        show_error(L"Open an available resource root before pressing F8.");
         return;
     }
 
     g.capture_in_progress = TRUE;
-    wchar_t pending[MAX_PATH * 4] = L"";
-    GoldenCaptureBundleResult result = {0};
-    GoldenCaptureBundleStatus status = GOLDEN_CAPTURE_BUNDLE_CREATE_FAILED;
+    wchar_t destination[MAX_PATH * 4] = L"";
+    wchar_t staged[MAX_PATH * 4] = L"";
+    GoldenSceneCaptureStatus status = GOLDEN_SCENE_CAPTURE_INVALID_ARGUMENT;
+    if (!make_history_temporary_path(L".png", staged, _countof(staged))) {
+        ShowWindow(g.main, SW_RESTORE);
+        SetForegroundWindow(g.main);
+        g.capture_in_progress = FALSE;
+        show_error(L"Goldens could not reserve recoverable undo storage for the captured image.");
+        return;
+    }
     for (int attempt = 0; attempt < 8; ++attempt) {
-        if (!make_pending_capture_path(directory, pending,
-                                       _countof(pending))) break;
-        status = golden_capture_bundle_create(
-            g.wic, foreground, pending, &result);
-        if (status != GOLDEN_CAPTURE_BUNDLE_DESTINATION_EXISTS) break;
+        if (!make_unique_copy_path(L"image.png", directory, destination,
+                                   _countof(destination))) break;
+        status = golden_capture_scene(g.wic, foreground, destination, NULL);
+        if (status != GOLDEN_SCENE_CAPTURE_DESTINATION_EXISTS) break;
     }
 
     ShowWindow(g.main, SW_RESTORE);
     SetForegroundWindow(g.main);
-    if (status != GOLDEN_CAPTURE_BUNDLE_OK) {
+    if (status != GOLDEN_SCENE_CAPTURE_OK) {
         g.capture_in_progress = FALSE;
-        show_error(capture_bundle_error(status));
+        show_error(scene_capture_error(status));
         return;
     }
-    SetFileAttributesW(pending, FILE_ATTRIBUTE_HIDDEN);
-
-    wchar_t destination[MAX_PATH * 4];
-    if (!publish_pending_capture(directory, pending, destination,
-                                 _countof(destination))) {
-        g.capture_in_progress = FALSE;
-        refresh_resources();
-        return;
-    }
-
-    wchar_t scene_path[MAX_PATH * 4];
-    BOOL has_scene = golden_path_join_extension(
-        destination, L"scene", L".png", scene_path, _countof(scene_path));
-    golden_path_copy(destination, g.current_dir, _countof(g.current_dir));
-    refresh_resources_expanding(destination);
-    if (has_scene && load_resource(scene_path))
-        select_loaded_resource(scene_path);
+    record_created_png(destination, staged);
+    HTREEITEM item = find_resource_item(TreeView_GetRoot(g.tree), destination);
     g.capture_in_progress = FALSE;
     update_status();
     update_menu_availability();
+    if (item) begin_tree_rename(item);
     MessageBeep(MB_OK);
 }
 
@@ -3279,7 +3191,7 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     case WM_HOTKEY:
         if (wp == CAPTURE_HOTKEY_ID) {
-            capture_foreground_bundle();
+            capture_foreground_scene();
             return 0;
         }
         break;
