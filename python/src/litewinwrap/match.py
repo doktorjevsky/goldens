@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from math import isfinite
 
 import cv2
 import numpy as np
@@ -11,6 +12,7 @@ from .window import Window
 
 
 _POLL_INTERVAL = 0.05
+_POST_CLICK_DELAY = 0.15
 
 
 class TargetNotFoundError(LookupError):
@@ -390,7 +392,10 @@ def click(
     overlap: float = 0.30,
     retry_on_ambiguity: bool = False,
     button: mouse.Button = "left",
+    wait_after: float = _POST_CLICK_DELAY,
 ) -> Match:
+    if not isfinite(wait_after) or wait_after < 0.0:
+        raise ValueError("Post-click wait must be a finite non-negative number")
     found = find(
         window,
         target,
@@ -400,6 +405,8 @@ def click(
         retry_on_ambiguity=retry_on_ambiguity,
     )
     mouse.click(found.click, button=button)
+    if wait_after:
+        time.sleep(wait_after)
     return found
 
 
@@ -411,7 +418,10 @@ def click_best(
     timeout: float = 0.0,
     overlap: float = 0.30,
     button: mouse.Button = "left",
+    wait_after: float = _POST_CLICK_DELAY,
 ) -> Match:
+    if not isfinite(wait_after) or wait_after < 0.0:
+        raise ValueError("Post-click wait must be a finite non-negative number")
     found = find_best(
         window,
         target,
@@ -420,4 +430,6 @@ def click_best(
         overlap=overlap,
     )
     mouse.click(found.click, button=button)
+    if wait_after:
+        time.sleep(wait_after)
     return found

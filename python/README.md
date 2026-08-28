@@ -65,6 +65,25 @@ only by case are rejected so the mapping remains safe on Windows filesystems.
 
 `Window.screenshot()`, `find_target()`, `find_targets()`, and `click_target()`
 take fresh screenshots and retain no target or match state on the window.
+Window and target searches use a two-second timeout by default. Set the
+process-wide default once when an application needs more time to render; an
+explicit timeout on an individual call still takes precedence, and `0.0`
+requests one immediate attempt:
+
+```python
+Window.set_default_timeout(3.0)
+```
+
+Successful target clicks wait 150 milliseconds before returning so the target
+application can repaint before the next scripted action. The process-wide
+default and individual calls are both configurable:
+
+```python
+Window.set_default_post_click_delay(0.25)
+window.click_target(target)                  # waits 250 ms
+window.click_target(target, wait_after=0.0)  # no settling delay
+```
+
 `find_target()` and `click_target()` require exactly one match and report an
 ambiguity if the target occurs more than once. Use `find_targets()` when every
 occurrence is wanted. Choosing the highest-scoring occurrence is deliberately
@@ -100,6 +119,24 @@ subprocess.Popen(["cmd.exe", "/d", "/s", "/c", "your shell command"])
 ```
 
 Avoid `shell=True` for values assembled from external input.
+
+Type literal Unicode text with `keyboard.write()` or its more descriptive
+`keyboard.type_text()` alias. `keyboard.press()` accepts case-insensitive key
+names; multiple names form a chord and are released in reverse order:
+
+```python
+from litewinwrap import keyboard
+
+window.focus()
+keyboard.press("ctrl", "a")
+keyboard.type_text("Hello, världen 👋")
+keyboard.press("enter")
+keyboard.press("tab", count=3)
+```
+
+`keyboard.down()` and `keyboard.up()` provide explicit control when a key must
+remain held. Integer Win32 virtual-key codes and the existing `write()`,
+`hotkey()`, `key_down()`, and `key_up()` functions remain supported.
 
 `match.click` captures the window from the physical screen, matches the cropped
 annotation, sends a click to its saved normalized click point, and returns the
