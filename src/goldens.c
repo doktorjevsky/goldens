@@ -26,6 +26,7 @@
 #include "ui_layout.h"
 #include "ui_tooltip.h"
 #include "ui_tool_icon.h"
+#include "resource_tree.h"
 #include "resource_ops.h"
 #include "resource_watcher.h"
 #include "atomic_file.h"
@@ -62,18 +63,6 @@ typedef enum {
     TOOL_RECTANGLE,
     TOOL_CLICK
 } ToolMode;
-
-typedef enum {
-    RESOURCE_DIRECTORY,
-    RESOURCE_PNG,
-    RESOURCE_ANNOTATION
-} ResourceNodeKind;
-
-typedef struct {
-    ResourceNodeKind kind;
-    wchar_t *path;
-    int annotation_index;
-} ResourceTreeNode;
 
 typedef struct {
     HWND window;
@@ -700,16 +689,13 @@ static HTREEITEM directory_item_for(HTREEITEM item) {
     ResourceTreeNode *node = tree_node_data(item);
     if (!node) return NULL;
     if (node->kind == RESOURCE_DIRECTORY) return item;
-    if (node->kind == RESOURCE_ANNOTATION) item = TreeView_GetParent(g.tree, item);
+    if (node->kind == RESOURCE_ANNOTATION)
+        item = TreeView_GetParent(g.tree, item);
     return item ? TreeView_GetParent(g.tree, item) : NULL;
 }
 
 static const wchar_t *selected_directory_path(void) {
-    HTREEITEM directory = directory_item_for(TreeView_GetSelection(g.tree));
-    ResourceTreeNode *node = tree_node_data(directory);
-    if (node && node->kind == RESOURCE_DIRECTORY && node->path) return node->path;
-    if (g.current_dir[0]) return g.current_dir;
-    return g.root[0] ? g.root : NULL;
+    return golden_resource_tree_selected_directory(g.tree);
 }
 
 static HTREEITEM find_resource_item(HTREEITEM item, const wchar_t *path) {
@@ -1758,6 +1744,12 @@ static void update_menu_availability(void) {
     BOOL image_available = active_pixels() && active_width() && active_height();
     BOOL window_selected = selected_capture_window() != NULL;
     BOOL resource_selected = selected_active_resource_node() != NULL;
+    const wchar_t *paste_directory = selected_directory_path();
+    DWORD paste_attributes = paste_directory ?
+        GetFileAttributesW(paste_directory) : INVALID_FILE_ATTRIBUTES;
+    BOOL paste_directory_available =
+        paste_attributes != INVALID_FILE_ATTRIBUTES &&
+        (paste_attributes & FILE_ATTRIBUTE_DIRECTORY);
     set_menu_command_enabled(g.file_menu, ID_NEW_FOLDER, root_available);
     set_menu_command_enabled(g.file_menu, ID_SAVE,
                              g.dirty && g.image_path[0]);
@@ -1767,7 +1759,8 @@ static void update_menu_availability(void) {
                              golden_history_can_redo(&g.history));
     set_menu_command_enabled(g.edit_menu, ID_COPY, image_available);
     set_menu_command_enabled(g.edit_menu, ID_PASTE,
-                             root_available && golden_clipboard_has_image());
+                             paste_directory_available &&
+                             golden_clipboard_has_image());
     set_menu_command_enabled(g.edit_menu, ID_RENAME, tree_rename_available());
     BOOL deleting_resource = resource_delete_available();
     ResourceTreeNode *delete_node = deleting_resource ? selected_tree_node() : NULL;
