@@ -361,9 +361,19 @@ GoldenCaptureBundleStatus golden_capture_bundle_create(
     for (size_t i = 0;
          status == GOLDEN_CAPTURE_BUNDLE_OK && i < scene.window_count; ++i) {
         GoldenImage isolated = {0};
-        if (!golden_capture_window(scene.windows[i].window, &isolated) &&
-            !copy_scene_crop(&composite, &scene.scene_bounds,
-                             &scene.windows[i].bounds, &isolated)) {
+        /* PrintWindow frequently renders DWM-owned shadows for popup windows
+           as solid black. Owned windows are already visible in the desktop
+           composite, so crop them from that source exactly as the user sees
+           them. Keep PrintWindow first for the root so overlays do not become
+           part of the otherwise isolated root asset. */
+        BOOL captured = i == 0 ?
+            (golden_capture_window(scene.windows[i].window, &isolated) ||
+             copy_scene_crop(&composite, &scene.scene_bounds,
+                             &scene.windows[i].bounds, &isolated)) :
+            (copy_scene_crop(&composite, &scene.scene_bounds,
+                             &scene.windows[i].bounds, &isolated) ||
+             golden_capture_window(scene.windows[i].window, &isolated));
+        if (!captured) {
             status = GOLDEN_CAPTURE_BUNDLE_SCREEN_CAPTURE_FAILED;
             break;
         }

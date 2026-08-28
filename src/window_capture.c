@@ -19,17 +19,6 @@ static BOOL pixels_have_content(const BYTE *pixels, int width, int height) {
     return FALSE;
 }
 
-static BOOL copy_screen_background(HDC destination, const RECT *bounds,
-                                   int width, int height) {
-    HDC screen = GetDC(NULL);
-    if (!screen) return FALSE;
-    BOOL copied = BitBlt(destination, 0, 0, width, height, screen,
-                        bounds->left, bounds->top,
-                        SRCCOPY | CAPTUREBLT);
-    ReleaseDC(NULL, screen);
-    return copied;
-}
-
 BOOL golden_window_capture_source_rect(const RECT *window_bounds,
                                        const RECT *visible_bounds,
                                        RECT *source) {
@@ -53,26 +42,23 @@ BOOL golden_window_capture_source_rect(const RECT *window_bounds,
 static BOOL render_window(HWND window, HDC destination, const RECT *bounds,
                           BYTE *pixels, int width, int height, void *context) {
     UNREFERENCED_PARAMETER(context);
-    BOOL iconic = IsIconic(window);
-    /* DWM paints translucent shadows outside the surface handled by
-       PrintWindow. Seed visible captures with the composited desktop so
-       those untouched pixels retain what the user actually sees. */
-    BOOL has_background = !iconic && copy_screen_background(
-        destination, bounds, width, height);
-    if (!has_background)
-        PatBlt(destination, 0, 0, width, height, BLACKNESS);
+    PatBlt(destination, 0, 0, width, height, BLACKNESS);
     BOOL rendered = PrintWindow(window, destination, PW_RENDERFULLCONTENT);
-    if (!rendered || (!has_background &&
-                      !pixels_have_content(pixels, width, height))) {
-        if (!has_background)
-            PatBlt(destination, 0, 0, width, height, BLACKNESS);
+    if (!rendered || !pixels_have_content(pixels, width, height)) {
+        PatBlt(destination, 0, 0, width, height, BLACKNESS);
         rendered = PrintWindow(window, destination, 0);
     }
-    if (rendered && (has_background ||
-                     pixels_have_content(pixels, width, height))) return TRUE;
-    if (has_background) return TRUE;
-    return !iconic && copy_screen_background(destination, bounds,
-                                              width, height);
+    if ((!rendered || !pixels_have_content(pixels, width, height)) &&
+        !IsIconic(window)) {
+        HDC screen = GetDC(NULL);
+        if (screen) {
+            rendered = BitBlt(destination, 0, 0, width, height, screen,
+                              bounds->left, bounds->top,
+                              SRCCOPY | CAPTUREBLT);
+            ReleaseDC(NULL, screen);
+        } else rendered = FALSE;
+    }
+    return rendered;
 }
 
 static BOOL capture_geometry(HWND window, RECT *window_bounds,
