@@ -74,6 +74,13 @@ static int test_checked_paths(void) {
         !golden_resource_json_path(L"C:\\root\\image.PNG",
                                    path, _countof(path)) ||
         wcscmp(path, L"C:\\root\\image.json") ||
+        !golden_path_is_same_or_inside(L"C:\\root", L"C:\\root") ||
+        !golden_path_is_same_or_inside(L"C:\\root\\nested\\image.png",
+                                       L"C:\\root") ||
+        !golden_path_is_same_or_inside(L"c:\\ROOT\\nested",
+                                       L"C:\\root\\") ||
+        golden_path_is_same_or_inside(L"C:\\rooted", L"C:\\root") ||
+        golden_path_is_same_or_inside(L"C:\\other", L"C:\\root") ||
         golden_resource_json_path(L"C:\\root\\image", path, _countof(path)) ||
         path[0] != 0 ||
         golden_resource_json_path(L"foo.png", too_small, 8) ||
@@ -162,6 +169,36 @@ static int test_first_move_failure_is_reported(const wchar_t *directory) {
         GetFileAttributesW(new_png) != INVALID_FILE_ATTRIBUTES;
     DeleteFileW(old_png); DeleteFileW(old_json);
     DeleteFileW(new_png); DeleteFileW(new_json);
+    return failed;
+}
+
+static int test_pair_moves_between_directories(const wchar_t *directory) {
+    wchar_t target_directory[MAX_PATH];
+    wchar_t source_png[MAX_PATH], source_json[MAX_PATH];
+    wchar_t target_png[MAX_PATH], target_json[MAX_PATH];
+    _snwprintf(target_directory, _countof(target_directory),
+               L"%s\\move-target", directory);
+    _snwprintf(source_png, _countof(source_png), L"%s\\move.png", directory);
+    _snwprintf(target_png, _countof(target_png), L"%s\\move.png",
+               target_directory);
+    if (!CreateDirectoryW(target_directory, NULL) ||
+        !golden_resource_json_path(source_png, source_json,
+                                   _countof(source_json)) ||
+        !golden_resource_json_path(target_png, target_json,
+                                   _countof(target_json)) ||
+        !write_bytes(source_png, "png", 3) ||
+        !write_bytes(source_json, "json", 4))
+        return 1;
+    GoldenResourceRenameResult result =
+        golden_rename_resource_pair(source_png, target_png);
+    int failed = result != GOLDEN_RENAME_OK ||
+        GetFileAttributesW(source_png) != INVALID_FILE_ATTRIBUTES ||
+        GetFileAttributesW(source_json) != INVALID_FILE_ATTRIBUTES ||
+        GetFileAttributesW(target_png) == INVALID_FILE_ATTRIBUTES ||
+        GetFileAttributesW(target_json) == INVALID_FILE_ATTRIBUTES;
+    DeleteFileW(source_png); DeleteFileW(source_json);
+    DeleteFileW(target_png); DeleteFileW(target_json);
+    RemoveDirectoryW(target_directory);
     return failed;
 }
 
@@ -410,6 +447,7 @@ int main(void) {
     if (!failed) failed = test_rollback_failure_is_reported(directory);
     if (!failed) failed = test_transaction_journal_recovers_split_pair(directory);
     if (!failed) failed = test_first_move_failure_is_reported(directory);
+    if (!failed) failed = test_pair_moves_between_directories(directory);
     if (!failed) failed = test_orphan_destination_json_blocks_png_move(directory);
     if (!failed) failed = test_resource_pair_move_undo_redo(directory);
     if (!failed) failed = test_resource_pair_copy(directory);

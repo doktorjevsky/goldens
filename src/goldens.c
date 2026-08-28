@@ -27,8 +27,10 @@
 #include "ui_tooltip.h"
 #include "ui_tool_icon.h"
 #include "resource_ops.h"
+#include "resource_watcher.h"
 #include "atomic_file.h"
 #include "history.h"
+#include "resource.h"
 
 #define APP_NAME L"Goldens"
 #define WINDOW_TIMER 1
@@ -36,16 +38,20 @@
 #define PREVIEW_INTERVAL_MS 80
 #define EDITOR_TOOLTIP_TIMER 3
 #define EDITOR_TOOLTIP_DELAY_MS 450
+#define RESOURCE_TREE_TIMER 4
+#define RESOURCE_TREE_COALESCE_MS 180
+#define RESOURCE_TREE_RETRY_MS 1000
 #define WM_PREVIEW_READY (WM_APP + 1)
 #define WM_RESOURCES_CHANGED (WM_APP + 2)
 #define WM_ANNOTATION_RENAMED (WM_APP + 3)
 #define WM_BEGIN_TREE_RENAME (WM_APP + 4)
+#define WM_RESOURCE_TREE_CHANGED (WM_APP + 5)
 
 enum {
     ID_OPEN = 100, ID_NEW_FOLDER, ID_SAVE, ID_EXIT, ID_UNDO, ID_REDO,
     ID_COPY, ID_PASTE, ID_RENAME, ID_DELETE,
     ID_CLEAR_CLICK, ID_FIT, ID_ZOOM_OUT, ID_ZOOM_IN, ID_ACTUAL,
-    ID_CAPTURE, ID_RECAPTURE, ID_REFRESH,
+    ID_CAPTURE, ID_RECAPTURE,
     ID_TOOL_SELECT, ID_TOOL_RECTANGLE, ID_TOOL_CLICK,
     ID_TREE = 200, ID_EDITOR, ID_WINDOWS, ID_SPLITTER_LEFT, ID_SPLITTER_RIGHT,
     ID_PROMPT_EDIT = 300, ID_PROMPT_OK, ID_PROMPT_CANCEL
@@ -94,6 +100,10 @@ typedef struct {
     wchar_t root[MAX_PATH * 4];
     wchar_t image_path[MAX_PATH * 4];
     wchar_t current_dir[MAX_PATH * 4];
+    DWORD image_volume_serial;
+    DWORD image_file_index_high;
+    DWORD image_file_index_low;
+    BOOL image_identity_valid;
     BYTE *pixels;
     UINT image_w, image_h, stride;
     uint64_t image_revision;
@@ -134,6 +144,9 @@ typedef struct {
     BOOL rebuilding_windows;
     BOOL rebuilding_resources;
     wchar_t pending_resource_selection[MAX_PATH * 4];
+    GoldenResourceWatcher resource_watcher;
+    BOOL resource_watcher_needs_restart;
+    BOOL resource_refresh_pending;
     BOOL resource_dragging;
     HTREEITEM resource_drag_source;
     HTREEITEM resource_drop_target;
@@ -191,6 +204,9 @@ static void layout_children(HWND hwnd);
 static void hide_annotation_tooltip(HWND hwnd);
 static void update_annotation_hover(HWND hwnd, POINT client);
 static void draw_tool_button(const DRAWITEMSTRUCT *item);
+static void restart_resource_watcher(void);
+static void schedule_resource_refresh(UINT delay_ms);
+static void cancel_resource_drag(void);
 static void create_folder(void);
 static BOOL apply_resource_history(GoldenHistoryEntry *entry, BOOL undo);
 static void discard_history_entry(GoldenHistoryEntry *entry, void *context);
@@ -243,6 +259,28 @@ static BOOL json_path_for(const wchar_t *png, wchar_t *out, size_t cap) {
 
 static BOOL parent_dir_for(const wchar_t *path, wchar_t *out, size_t cap) {
     return golden_path_copy(path, out, cap) && PathRemoveFileSpecW(out);
+}
+
+static BOOL read_file_identity(const wchar_t *path, DWORD *volume_serial,
+                               DWORD *file_index_high, DWORD *file_index_low) {
+    HANDLE file = CreateFileW(path, FILE_READ_ATTRIBUTES,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
+        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (file == INVALID_HANDLE_VALUE) return FALSE;
+    BY_HANDLE_FILE_INFORMATION info;
+    BOOL ok = GetFileInformationByHandle(file, &info);
+    CloseHandle(file);
+    if (!ok) return FALSE;
+    *volume_serial = info.dwVolumeSerialNumber;
+    *file_index_high = info.nFileIndexHigh;
+    *file_index_low = info.nFileIndexLow;
+    return TRUE;
+}
+
+static void remember_image_identity(const wchar_t *path) {
+    g.image_identity_valid = read_file_identity(
+        path, &g.image_volume_serial, &g.image_file_index_high,
+        &g.image_file_index_low);
 }
 
 static BOOL replace_path_prefix(wchar_t *path, size_t capacity,
@@ -497,6 +535,7 @@ static void clear_image(void) {
     g.pixels = NULL;
     g.image_w = g.image_h = g.stride = 0;
     g.resource_visible = FALSE;
+    g.image_identity_valid = FALSE;
     ++g.image_revision;
 }
 
@@ -747,57 +786,6 @@ typedef struct {
     BOOL directory;
 } ResourceEntry;
 
-typedef struct {
-    wchar_t **paths;
-    size_t count;
-    size_t capacity;
-} ExpandedResourcePaths;
-
-static void remember_expanded_resource_paths(HTREEITEM item,
-                                             ExpandedResourcePaths *expanded) {
-    while (item) {
-        ResourceTreeNode *node = tree_node_data(item);
-        if (node && node->kind == RESOURCE_DIRECTORY && node->path &&
-            (TreeView_GetItemState(g.tree, item, TVIS_EXPANDED) &
-             TVIS_EXPANDED)) {
-            if (expanded->count == expanded->capacity) {
-                size_t next = expanded->capacity > SIZE_MAX / 2 ? 0 :
-                    expanded->capacity ? expanded->capacity * 2 : 16;
-                if (next && next <= SIZE_MAX / sizeof(*expanded->paths)) {
-                    wchar_t **grown = (wchar_t **)realloc(
-                        expanded->paths, next * sizeof(*expanded->paths));
-                    if (grown) {
-                        expanded->paths = grown;
-                        expanded->capacity = next;
-                    }
-                }
-            }
-            if (expanded->count < expanded->capacity) {
-                wchar_t *path = dup_wide(node->path);
-                if (path) expanded->paths[expanded->count++] = path;
-            }
-        }
-        remember_expanded_resource_paths(TreeView_GetChild(g.tree, item),
-                                         expanded);
-        item = TreeView_GetNextSibling(g.tree, item);
-    }
-}
-
-static void restore_expanded_resource_paths(
-    const ExpandedResourcePaths *expanded) {
-    for (size_t i = 0; i < expanded->count; ++i) {
-        HTREEITEM item = find_resource_item(TreeView_GetRoot(g.tree),
-                                            expanded->paths[i]);
-        if (item) TreeView_Expand(g.tree, item, TVE_EXPAND);
-    }
-}
-
-static void free_expanded_resource_paths(ExpandedResourcePaths *expanded) {
-    for (size_t i = 0; i < expanded->count; ++i) free(expanded->paths[i]);
-    free(expanded->paths);
-    *expanded = (ExpandedResourcePaths){0};
-}
-
 static int compare_resources(const void *left, const void *right) {
     const ResourceEntry *a = (const ResourceEntry *)left;
     const ResourceEntry *b = (const ResourceEntry *)right;
@@ -849,9 +837,163 @@ static void populate_directory(HTREEITEM parent, const wchar_t *directory) {
     free(entries);
 }
 
+typedef struct {
+    wchar_t **expanded_paths;
+    size_t expanded_count;
+    size_t expanded_capacity;
+    BOOL had_selection;
+    ResourceNodeKind selected_kind;
+    wchar_t selected_path[MAX_PATH * 4];
+    int selected_annotation;
+} ResourceTreeSnapshot;
+
+static void capture_expanded_resources(HTREEITEM item,
+                                       ResourceTreeSnapshot *snapshot) {
+    while (item) {
+        ResourceTreeNode *node = tree_node_data(item);
+        if (node && node->kind == RESOURCE_DIRECTORY && node->path &&
+            (TreeView_GetItemState(g.tree, item, TVIS_EXPANDED) & TVIS_EXPANDED)) {
+            if (snapshot->expanded_count == snapshot->expanded_capacity) {
+                size_t next = snapshot->expanded_capacity > SIZE_MAX / 2 ? 0 :
+                    snapshot->expanded_capacity ?
+                    snapshot->expanded_capacity * 2 : 16;
+                if (next &&
+                    next <= SIZE_MAX / sizeof(*snapshot->expanded_paths)) {
+                    wchar_t **grown = (wchar_t **)realloc(
+                        snapshot->expanded_paths,
+                        next * sizeof(*snapshot->expanded_paths));
+                    if (grown) {
+                        snapshot->expanded_paths = grown;
+                        snapshot->expanded_capacity = next;
+                    }
+                }
+            }
+            if (snapshot->expanded_count < snapshot->expanded_capacity) {
+                wchar_t *path = dup_wide(node->path);
+                if (path)
+                    snapshot->expanded_paths[snapshot->expanded_count++] = path;
+            }
+        }
+        capture_expanded_resources(TreeView_GetChild(g.tree, item), snapshot);
+        item = TreeView_GetNextSibling(g.tree, item);
+    }
+}
+
+static void capture_resource_tree_snapshot(ResourceTreeSnapshot *snapshot) {
+    ZeroMemory(snapshot, sizeof(*snapshot));
+    snapshot->selected_annotation = -1;
+    HTREEITEM selected = TreeView_GetSelection(g.tree);
+    ResourceTreeNode *node = tree_node_data(selected);
+    if (node) {
+        snapshot->had_selection = TRUE;
+        snapshot->selected_kind = node->kind;
+        snapshot->selected_annotation = node->annotation_index;
+        if (node->path)
+            golden_path_copy(node->path, snapshot->selected_path,
+                             _countof(snapshot->selected_path));
+        else {
+            ResourceTreeNode *parent = tree_node_data(
+                TreeView_GetParent(g.tree, selected));
+            if (parent && parent->path)
+                golden_path_copy(parent->path, snapshot->selected_path,
+                                 _countof(snapshot->selected_path));
+        }
+    }
+    capture_expanded_resources(TreeView_GetRoot(g.tree), snapshot);
+}
+
+static void release_resource_tree_snapshot(ResourceTreeSnapshot *snapshot) {
+    for (size_t i = 0; i < snapshot->expanded_count; ++i)
+        free(snapshot->expanded_paths[i]);
+    free(snapshot->expanded_paths);
+}
+
+static HTREEITEM find_resource_with_current_identity(HTREEITEM item) {
+    while (item) {
+        ResourceTreeNode *node = tree_node_data(item);
+        if (node && node->kind == RESOURCE_PNG && node->path) {
+            DWORD volume = 0, high = 0, low = 0;
+            if (read_file_identity(node->path, &volume, &high, &low) &&
+                volume == g.image_volume_serial &&
+                high == g.image_file_index_high && low == g.image_file_index_low)
+                return item;
+        }
+        HTREEITEM found = find_resource_with_current_identity(
+            TreeView_GetChild(g.tree, item));
+        if (found) return found;
+        item = TreeView_GetNextSibling(g.tree, item);
+    }
+    return NULL;
+}
+
+static void reconcile_current_resource(ResourceTreeSnapshot *snapshot) {
+    if (!g.image_path[0]) return;
+    wchar_t old_path[MAX_PATH * 4];
+    if (!golden_path_copy(g.image_path, old_path, _countof(old_path))) return;
+    HTREEITEM current = find_resource_item(TreeView_GetRoot(g.tree), g.image_path);
+    if (current) {
+        remember_image_identity(g.image_path);
+        return;
+    }
+    if (g.image_identity_valid)
+        current = find_resource_with_current_identity(TreeView_GetRoot(g.tree));
+    ResourceTreeNode *moved = tree_node_data(current);
+    if (moved && moved->path) {
+        golden_path_copy(moved->path, g.image_path, _countof(g.image_path));
+        parent_dir_for(g.image_path, g.current_dir, _countof(g.current_dir));
+        if (snapshot->had_selection &&
+            !_wcsicmp(snapshot->selected_path, old_path))
+            golden_path_copy(g.image_path, snapshot->selected_path,
+                             _countof(snapshot->selected_path));
+        remember_image_identity(g.image_path);
+        update_context_label();
+        wchar_t title[MAX_PATH * 4 + 32];
+        _snwprintf(title, _countof(title), L"Goldens — %s",
+                   PathFindFileNameW(g.image_path));
+        SetWindowTextW(g.main, title);
+        update_status();
+    } else if (!g.dirty) {
+        clear_image();
+        g.image_path[0] = 0;
+        g.annotation_count = g.saved_annotation_count = 0;
+        g.selected = -1;
+        g.dirty = FALSE;
+        golden_history_clear(&g.history);
+        SetWindowTextW(g.main, APP_NAME);
+        update_context_label();
+        InvalidateRect(g.editor, NULL, FALSE);
+    }
+    DWORD current_attributes = GetFileAttributesW(g.current_dir);
+    if (current_attributes == INVALID_FILE_ATTRIBUTES ||
+        !(current_attributes & FILE_ATTRIBUTE_DIRECTORY))
+        golden_path_copy(g.root, g.current_dir, _countof(g.current_dir));
+}
+
+static void restore_resource_tree_snapshot(
+    const ResourceTreeSnapshot *snapshot) {
+    for (size_t i = 0; i < snapshot->expanded_count; ++i) {
+        HTREEITEM item = find_resource_item(TreeView_GetRoot(g.tree),
+                                            snapshot->expanded_paths[i]);
+        if (item) TreeView_Expand(g.tree, item, TVE_EXPAND);
+    }
+    if (!snapshot->had_selection || !snapshot->selected_path[0]) return;
+    HTREEITEM target = NULL;
+    if (snapshot->selected_kind == RESOURCE_ANNOTATION &&
+        !_wcsicmp(snapshot->selected_path, g.image_path) &&
+        snapshot->selected_annotation >= 0)
+        target = find_annotation_item(snapshot->selected_annotation);
+    else
+        target = find_resource_item(TreeView_GetRoot(g.tree),
+                                    snapshot->selected_path);
+    if (target) {
+        TreeView_EnsureVisible(g.tree, target);
+        TreeView_SelectItem(g.tree, target);
+    }
+}
+
 static void refresh_resources_expanding(const wchar_t *expand_path) {
-    ExpandedResourcePaths expanded = {0};
-    remember_expanded_resource_paths(TreeView_GetRoot(g.tree), &expanded);
+    ResourceTreeSnapshot snapshot;
+    capture_resource_tree_snapshot(&snapshot);
     g.rebuilding_resources = TRUE;
     free_tree_item(g.tree, TreeView_GetRoot(g.tree));
     TreeView_DeleteAllItems(g.tree);
@@ -861,14 +1003,14 @@ static void refresh_resources_expanding(const wchar_t *expand_path) {
                               journal, _countof(journal))) {
             show_error(L"The resource root path is too long for transaction recovery.");
             g.rebuilding_resources = FALSE;
-            free_expanded_resource_paths(&expanded);
+            release_resource_tree_snapshot(&snapshot);
             update_capture_availability();
             return;
         }
         if (golden_recover_resource_pair_move(journal) != GOLDEN_RENAME_OK) {
             show_error(L"Goldens found an interrupted resource move that Windows could not recover. Close programs using the files, then refresh.");
             g.rebuilding_resources = FALSE;
-            free_expanded_resource_paths(&expanded);
+            release_resource_tree_snapshot(&snapshot);
             update_capture_availability();
             return;
         }
@@ -877,20 +1019,43 @@ static void refresh_resources_expanding(const wchar_t *expand_path) {
         HTREEITEM root = insert_path_item(g.tree, TVI_ROOT, label, g.root, TRUE);
         populate_directory(root, g.root);
         TreeView_Expand(g.tree, root, TVE_EXPAND);
-        restore_expanded_resource_paths(&expanded);
-        if (expand_path && expand_path[0]) {
-            HTREEITEM target = find_resource_item(TreeView_GetRoot(g.tree),
-                                                  expand_path);
-            if (target) {
-                TreeView_EnsureVisible(g.tree, target);
-                TreeView_Expand(g.tree, target, TVE_EXPAND);
-            }
+    }
+    g.rebuilding_resources = FALSE;
+    reconcile_current_resource(&snapshot);
+    refresh_annotation_tree();
+    g.rebuilding_resources = TRUE;
+    restore_resource_tree_snapshot(&snapshot);
+    if (expand_path && expand_path[0]) {
+        HTREEITEM target = find_resource_item(TreeView_GetRoot(g.tree),
+                                              expand_path);
+        if (target) {
+            TreeView_EnsureVisible(g.tree, target);
+            TreeView_Expand(g.tree, target, TVE_EXPAND);
         }
     }
-    free_expanded_resource_paths(&expanded);
     g.rebuilding_resources = FALSE;
-    refresh_annotation_tree();
+    release_resource_tree_snapshot(&snapshot);
     update_capture_availability();
+    update_tool_availability();
+}
+
+static void restart_resource_watcher(void) {
+    KillTimer(g.main, RESOURCE_TREE_TIMER);
+    g.resource_refresh_pending = FALSE;
+    golden_resource_watcher_stop(&g.resource_watcher, 2000);
+    g.resource_watcher_needs_restart = FALSE;
+    if (g.root[0] && !golden_resource_watcher_start(
+            &g.resource_watcher, g.root, g.main, WM_RESOURCE_TREE_CHANGED)) {
+        g.resource_watcher_needs_restart = TRUE;
+        schedule_resource_refresh(RESOURCE_TREE_RETRY_MS);
+    }
+}
+
+static void schedule_resource_refresh(UINT delay_ms) {
+    if (g.resource_refresh_pending) return;
+    g.resource_refresh_pending = TRUE;
+    if (!SetTimer(g.main, RESOURCE_TREE_TIMER, delay_ms, NULL))
+        PostMessageW(g.main, WM_TIMER, RESOURCE_TREE_TIMER, 0);
 }
 
 static void refresh_resources(void) {
@@ -972,13 +1137,13 @@ static void open_folder(void) {
         clear_image();
         clear_preview();
         g.image_path[0] = 0;
-        g.annotation_count = 0;
         g.selected = -1;
-        update_tool_availability();
         g.annotation_count = g.saved_annotation_count = 0;
         g.dirty = FALSE;
         golden_history_clear(&g.history);
+        update_tool_availability();
         remember_root();
+        restart_resource_watcher();
         refresh_resources();
         update_status();
         SetWindowTextW(g.main, APP_NAME);
@@ -1003,6 +1168,7 @@ static BOOL load_resource(const wchar_t *path) {
     g.pan_x = g.pan_y = 0;
     golden_path_copy(next_path, g.image_path, _countof(g.image_path));
     golden_path_copy(next_directory, g.current_dir, _countof(g.current_dir));
+    remember_image_identity(next_path);
     update_status();
     load_annotations(next_path);
     update_tool_availability();
@@ -1149,8 +1315,7 @@ static void draw_editor(HWND hwnd, HDC dc) {
         if (g.annotations[i].has_click) {
             int cx = r.left + (int)((r.right - r.left) * g.annotations[i].click_x);
             int cy = r.top + (int)((r.bottom - r.top) * g.annotations[i].click_y);
-            MoveToEx(dc, cx - 6, cy, NULL); LineTo(dc, cx + 7, cy);
-            MoveToEx(dc, cx, cy - 6, NULL); LineTo(dc, cx, cy + 7);
+            golden_draw_click_mark(dc, (POINT){cx, cy});
         }
     }
     if (!g.preview_mode && g.drawing) {
@@ -1601,7 +1766,6 @@ static void update_menu_availability(void) {
     set_menu_command_enabled(g.view_menu, ID_ZOOM_OUT, image_available);
     set_menu_command_enabled(g.view_menu, ID_ZOOM_IN, image_available);
     set_menu_command_enabled(g.view_menu, ID_ACTUAL, image_available);
-    set_menu_command_enabled(g.view_menu, ID_REFRESH, root_available);
     set_menu_command_enabled(g.capture_menu, ID_CAPTURE, window_selected);
     set_menu_command_enabled(g.capture_menu, ID_RECAPTURE,
                              window_selected && resource_selected);
@@ -2269,6 +2433,7 @@ static BOOL ensure_capture_directory(void) {
     if (!golden_path_copy(cwd, g.root, _countof(g.root)) ||
         !golden_path_copy(cwd, g.current_dir, _countof(g.current_dir)))
         return FALSE;
+    restart_resource_watcher();
     refresh_resources();
     update_status();
     return TRUE;
@@ -2530,7 +2695,10 @@ static void recapture_current(void) {
                                       g.image_path, old_version, new_version);
         golden_history_push_new(&g.history, &entry);
         clear_preview();
-        if (load_png(g.image_path)) g.resource_visible = TRUE;
+        if (load_png(g.image_path)) {
+            g.resource_visible = TRUE;
+            remember_image_identity(g.image_path);
+        }
         g.zoom = 0.0;
         g.pan_x = g.pan_y = 0;
         InvalidateRect(g.editor, NULL, FALSE);
@@ -2900,10 +3068,6 @@ static void handle_command(int id) {
         break;
     case ID_CAPTURE: capture_new(); break;
     case ID_RECAPTURE: recapture_current(); break;
-    case ID_REFRESH: if (g.root[0]) {
-        refresh_resources();
-        update_status();
-    } break;
     case ID_TOOL_SELECT: set_tool(TOOL_SELECT); break;
     case ID_TOOL_RECTANGLE: set_tool(TOOL_RECTANGLE); break;
     case ID_TOOL_CLICK: set_tool(TOOL_CLICK); break;
@@ -2935,8 +3099,6 @@ static HMENU create_main_menu(void) {
     AppendMenuW(view, MF_STRING, ID_ZOOM_OUT, L"Zoom Out\tCtrl+-");
     AppendMenuW(view, MF_STRING, ID_ZOOM_IN, L"Zoom In\tCtrl++");
     AppendMenuW(view, MF_STRING, ID_ACTUAL, L"Actual Size\t1");
-    AppendMenuW(view, MF_SEPARATOR, 0, NULL);
-    AppendMenuW(view, MF_STRING, ID_REFRESH, L"Rescan Resource Folder\tF5");
     AppendMenuW(capture, MF_STRING, ID_CAPTURE, L"New Capture…");
     AppendMenuW(capture, MF_STRING, ID_RECAPTURE, L"Recapture Current Resource");
     g.file_menu = file;
@@ -3076,6 +3238,7 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         set_tool(TOOL_SELECT);
         update_context_label();
         if (g.root[0]) {
+            restart_resource_watcher();
             refresh_resources();
         }
         update_status();
@@ -3106,6 +3269,39 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             refresh_preview_metadata();
         }
         else if (wp == PREVIEW_TIMER) request_preview_frame();
+        else if (wp == RESOURCE_TREE_TIMER) {
+            if (g.resource_dragging) {
+                if (!SetTimer(hwnd, RESOURCE_TREE_TIMER,
+                              RESOURCE_TREE_COALESCE_MS, NULL))
+                    PostMessageW(hwnd, WM_TIMER, RESOURCE_TREE_TIMER, 0);
+                return 0;
+            }
+            KillTimer(hwnd, RESOURCE_TREE_TIMER);
+            BOOL watcher_started = g.resource_watcher.implementation != NULL;
+            if (g.resource_watcher_needs_restart) {
+                golden_resource_watcher_stop(&g.resource_watcher, 2000);
+                g.resource_watcher_needs_restart = FALSE;
+                watcher_started = g.root[0] && golden_resource_watcher_start(
+                    &g.resource_watcher, g.root, g.main,
+                    WM_RESOURCE_TREE_CHANGED);
+                if (!watcher_started)
+                    g.resource_watcher_needs_restart = TRUE;
+            }
+            LONG generation_before = golden_resource_watcher_generation(
+                &g.resource_watcher);
+            refresh_resources();
+            update_status();
+            golden_resource_watcher_acknowledge(&g.resource_watcher);
+            LONG generation_after = golden_resource_watcher_generation(
+                &g.resource_watcher);
+            g.resource_refresh_pending = FALSE;
+            if (generation_after != generation_before)
+                schedule_resource_refresh(RESOURCE_TREE_COALESCE_MS);
+            if (!watcher_started && g.root[0]) {
+                g.resource_watcher_needs_restart = TRUE;
+                schedule_resource_refresh(RESOURCE_TREE_RETRY_MS);
+            }
+        }
         return 0;
     case WM_INITMENUPOPUP:
         update_menu_availability();
@@ -3162,6 +3358,11 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_CLIPBOARDUPDATE:
         update_menu_availability();
+        return 0;
+    case WM_RESOURCE_TREE_CHANGED:
+        if (wp) g.resource_watcher_needs_restart = TRUE;
+        schedule_resource_refresh(
+            wp ? RESOURCE_TREE_RETRY_MS : RESOURCE_TREE_COALESCE_MS);
         return 0;
     case WM_RESOURCES_CHANGED: {
         refresh_resources();
@@ -3315,8 +3516,11 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     case WM_DESTROY:
         RemoveClipboardFormatListener(hwnd);
+        cancel_resource_drag();
         KillTimer(hwnd, WINDOW_TIMER);
         KillTimer(hwnd, PREVIEW_TIMER);
+        KillTimer(hwnd, RESOURCE_TREE_TIMER);
+        golden_resource_watcher_stop(&g.resource_watcher, 2000);
         if (g.editor_tooltip) {
             DestroyWindow(g.editor_tooltip);
             g.editor_tooltip = NULL;
@@ -3361,7 +3565,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR command_line, 
     WNDCLASSW main_class = {0};
     main_class.lpfnWndProc = MainProc;
     main_class.hInstance = instance;
-    main_class.hIcon = LoadIconW(NULL, IDI_APPLICATION);
+    main_class.hIcon = LoadIconW(instance, MAKEINTRESOURCEW(IDI_GOLDENS));
     main_class.hCursor = LoadCursorW(NULL, IDC_ARROW);
     main_class.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
     main_class.lpszClassName = L"GoldensMain";
@@ -3389,7 +3593,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR command_line, 
         {FVIRTKEY | FCONTROL, 'S', ID_SAVE},
         {FVIRTKEY | FCONTROL, 'Z', ID_UNDO}, {FVIRTKEY | FCONTROL, 'Y', ID_REDO},
         {FVIRTKEY | FCONTROL, 'C', ID_COPY}, {FVIRTKEY | FCONTROL, 'V', ID_PASTE},
-        {FVIRTKEY, VK_F5, ID_REFRESH}, {FVIRTKEY, VK_F2, ID_RENAME},
+        {FVIRTKEY, VK_F2, ID_RENAME},
         {FVIRTKEY, VK_DELETE, ID_DELETE},
         {FVIRTKEY | FCONTROL, VK_OEM_MINUS, ID_ZOOM_OUT},
         {FVIRTKEY | FCONTROL, VK_OEM_PLUS, ID_ZOOM_IN},

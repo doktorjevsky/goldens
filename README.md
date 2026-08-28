@@ -97,6 +97,12 @@ destination to the corresponding directory.
   annotation first returns selection to its parent PNG. If a displayed PNG or
   window is deselected, the editor falls back to the source selected in the
   other tree or becomes empty.
+- The resource tree watches the open folder and all of its subfolders. PNGs and
+  directories added, moved, renamed, or removed in Explorer appear
+  automatically, while expanded folders and the current selection are
+  preserved. An active PNG follows external moves and renames within the open
+  resource folder. PNGs and non-root directories can also be dragged onto a
+  directory in the tree to move them; a PNG's JSON sidecar moves with it.
 - Changes are written only by **File → Save Annotations**. JSON and captured
   PNG files are replaced atomically, so an interrupted or failed write leaves
   the last valid file in place. Switching images or exiting prompts if there
@@ -138,13 +144,19 @@ destination to the corresponding directory.
 ## Tests
 
 Run `test.bat`. It first builds the shipped application with the strict
-production diagnostics, then runs the native test suite. The suite covers
+production diagnostics, then compiles and runs the independent native test
+suites in parallel. By default it runs two jobs at a time; set
+`GOLDENS_TEST_JOBS` to a positive integer to adjust the concurrency. The
+suite covers
 annotation names and geometry,
 click normalization, viewport transforms, strict and order-independent JSON
 parsing, arbitrarily long unknown keys, Unicode and escape round trips,
 malformed/truncated input, numeric and nesting limits, full annotation capacity,
 and invalid-model serialization,
 live top-level window lifecycle reconciliation (including minimized windows),
+recursive resource-folder change notifications, burst coalescing, stress
+coverage, and clean watcher shutdown,
+resource-tree move validation and PNG/JSON moves between directories,
 exact 1:1 GDI rendering, overlay ordering, custom and collapsed column layouts
 from compact to wide and 100–200% DPI, version-compatible native tooltip
 registration and positioning, DPI-scaled tool icon rasterization, transactional
