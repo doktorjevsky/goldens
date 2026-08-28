@@ -40,6 +40,8 @@ BOOL golden_path_join_extension(const wchar_t *directory, const wchar_t *stem,
                                 wchar_t *output, size_t capacity);
 BOOL golden_resource_json_path(const wchar_t *png_path,
                                wchar_t *output, size_t capacity);
+BOOL golden_copy_resource_pair(const wchar_t *source_png,
+                               const wchar_t *destination_png);
 GoldenResourceRenameResult golden_rename_resource_pair(const wchar_t *old_png,
                                                        const wchar_t *new_png);
 GoldenResourceRenameResult golden_rename_resource_pair_with_move(
