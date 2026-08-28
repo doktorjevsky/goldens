@@ -1769,6 +1769,14 @@ static void update_menu_availability(void) {
     set_menu_command_enabled(g.edit_menu, ID_PASTE,
                              root_available && golden_clipboard_has_image());
     set_menu_command_enabled(g.edit_menu, ID_RENAME, tree_rename_available());
+    BOOL deleting_resource = resource_delete_available();
+    ResourceTreeNode *delete_node = deleting_resource ? selected_tree_node() : NULL;
+    ModifyMenuW(g.edit_menu, ID_DELETE, MF_BYCOMMAND | MF_STRING, ID_DELETE,
+                delete_node && delete_node->kind == RESOURCE_DIRECTORY ?
+                                    L"Delete Folder…\tDel" :
+                deleting_resource ? L"Delete PNG and Sidecar\tDel" :
+                annotation_action_available() ? L"Delete Annotation\tDel" :
+                                                L"Delete\tDel");
     set_menu_command_enabled(g.edit_menu, ID_DELETE, delete_action_available());
     set_menu_command_enabled(g.edit_menu, ID_CLEAR_CLICK,
                              click_clear_available());
