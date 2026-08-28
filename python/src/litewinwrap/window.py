@@ -3,7 +3,8 @@ from __future__ import annotations
 import re
 import time
 from dataclasses import dataclass
-from typing import Pattern
+from math import isfinite
+from typing import ClassVar, Pattern
 
 from . import win32
 from .mouse import Button
@@ -59,7 +60,32 @@ def _describe_selectors(
 class Window:
     """A live reference to a Win32 window. Only the HWND is retained."""
 
+    default_timeout: ClassVar[float] = 2.0
+    default_post_click_delay: ClassVar[float] = 0.15
+
     hwnd: HWND
+
+    @classmethod
+    def set_default_timeout(cls, timeout: float) -> None:
+        """Set the timeout used by window and target searches when omitted."""
+
+        value = float(timeout)
+        if not isfinite(value) or value < 0.0:
+            raise ValueError("Default timeout must be a finite non-negative number")
+        cls.default_timeout = value
+
+    @classmethod
+    def set_default_post_click_delay(cls, delay: float) -> None:
+        """Set the settling delay after successful target clicks."""
+
+        value = float(delay)
+        if not isfinite(value) or value < 0.0:
+            raise ValueError("Post-click delay must be a finite non-negative number")
+        cls.default_post_click_delay = value
+
+    @classmethod
+    def _resolve_timeout(cls, timeout: float | None) -> float:
+        return cls.default_timeout if timeout is None else timeout
 
     @property
     def exists(self) -> bool:
@@ -134,8 +160,9 @@ class Window:
         class_name: TextSelector | None = None,
         process_id: int | None = None,
         visible_only: bool = True,
-        timeout: float = 0.0,
+        timeout: float | None = None,
     ) -> Window:
+        timeout = cls._resolve_timeout(timeout)
         deadline = time.monotonic() + max(0.0, timeout)
         while True:
             matches = cls.find_all(
@@ -180,8 +207,9 @@ class Window:
         class_name: TextSelector | None = None,
         recursive: bool = True,
         visible_only: bool = True,
-        timeout: float = 0.0,
+        timeout: float | None = None,
     ) -> tuple[Window, ...]:
+        timeout = type(self)._resolve_timeout(timeout)
         deadline = time.monotonic() + max(0.0, timeout)
         while True:
             matches = tuple(
@@ -208,8 +236,9 @@ class Window:
         class_name: TextSelector | None = None,
         recursive: bool = True,
         visible_only: bool = True,
-        timeout: float = 0.0,
+        timeout: float | None = None,
     ) -> Window:
+        timeout = type(self)._resolve_timeout(timeout)
         matches = self.find_children(
             title,
             class_name=class_name,
@@ -236,7 +265,7 @@ class Window:
         target: Target,
         *,
         threshold: float = 0.90,
-        timeout: float = 0.0,
+        timeout: float | None = None,
         overlap: float = 0.30,
     ) -> tuple[Match, ...]:
         from . import match as image_match
@@ -245,7 +274,7 @@ class Window:
             self.hwnd,
             target,
             threshold=threshold,
-            timeout=timeout,
+            timeout=type(self)._resolve_timeout(timeout),
             overlap=overlap,
         )
 
@@ -254,7 +283,7 @@ class Window:
         target: Target,
         *,
         threshold: float = 0.90,
-        timeout: float = 0.0,
+        timeout: float | None = None,
         overlap: float = 0.30,
         retry_on_ambiguity: bool = False,
     ) -> Match:
@@ -264,7 +293,7 @@ class Window:
             self.hwnd,
             target,
             threshold=threshold,
-            timeout=timeout,
+            timeout=type(self)._resolve_timeout(timeout),
             overlap=overlap,
             retry_on_ambiguity=retry_on_ambiguity,
         )
@@ -274,7 +303,7 @@ class Window:
         target: Target,
         *,
         threshold: float = 0.90,
-        timeout: float = 0.0,
+        timeout: float | None = None,
         overlap: float = 0.30,
     ) -> Match:
         from . import match as image_match
@@ -283,7 +312,7 @@ class Window:
             self.hwnd,
             target,
             threshold=threshold,
-            timeout=timeout,
+            timeout=type(self)._resolve_timeout(timeout),
             overlap=overlap,
         )
 
@@ -292,10 +321,11 @@ class Window:
         target: Target,
         *,
         threshold: float = 0.90,
-        timeout: float = 0.0,
+        timeout: float | None = None,
         overlap: float = 0.30,
         retry_on_ambiguity: bool = False,
         button: Button = "left",
+        wait_after: float | None = None,
     ) -> Match:
         from . import match as image_match
 
@@ -303,10 +333,15 @@ class Window:
             self.hwnd,
             target,
             threshold=threshold,
-            timeout=timeout,
+            timeout=type(self)._resolve_timeout(timeout),
             overlap=overlap,
             retry_on_ambiguity=retry_on_ambiguity,
             button=button,
+            wait_after=(
+                type(self).default_post_click_delay
+                if wait_after is None
+                else wait_after
+            ),
         )
 
     def click_best_target(
@@ -314,9 +349,10 @@ class Window:
         target: Target,
         *,
         threshold: float = 0.90,
-        timeout: float = 0.0,
+        timeout: float | None = None,
         overlap: float = 0.30,
         button: Button = "left",
+        wait_after: float | None = None,
     ) -> Match:
         from . import match as image_match
 
@@ -324,9 +360,14 @@ class Window:
             self.hwnd,
             target,
             threshold=threshold,
-            timeout=timeout,
+            timeout=type(self)._resolve_timeout(timeout),
             overlap=overlap,
             button=button,
+            wait_after=(
+                type(self).default_post_click_delay
+                if wait_after is None
+                else wait_after
+            ),
         )
 
     def focus(self, *, restore: bool = True, timeout: float = 1.0) -> Window:

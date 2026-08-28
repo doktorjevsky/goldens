@@ -8,6 +8,7 @@ import numpy as np
 from litewinwrap.match import (
     TargetAmbiguousError,
     best_match,
+    click,
     find,
     match,
     match_all,
@@ -77,6 +78,19 @@ class MatchTests(unittest.TestCase):
 
         self.assertEqual(found.rect, Rect(6, 5, 18, 15))
         self.assertAlmostEqual(found.score, 1.0)
+
+    def test_click_waits_after_successful_input(self) -> None:
+        capture = self._capture_with_matches((6, 5))
+
+        with (
+            patch("litewinwrap.match.capture", return_value=capture),
+            patch("litewinwrap.match.mouse.click") as send_click,
+            patch("litewinwrap.match.time.sleep") as sleep,
+        ):
+            found = click(HWND(123), self.target, threshold=0.99, wait_after=0.2)
+
+        send_click.assert_called_once_with(found.click, button="left")
+        sleep.assert_called_once_with(0.2)
 
     def test_find_can_retry_transient_ambiguity_until_match_is_unique(self) -> None:
         ambiguous = self._capture_with_matches((6, 5), (50, 35))

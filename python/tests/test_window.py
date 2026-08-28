@@ -10,6 +10,64 @@ from litewinwrap.window import Window
 
 
 class WindowTests(unittest.TestCase):
+    def test_default_timeout_is_used_when_search_timeout_is_omitted(self) -> None:
+        window = Window(HWND(123))
+        target = Target("button", np.zeros((2, 2, 3), dtype=np.uint8))
+        found = Match("button", 0.99, Rect(2, 3, 4, 5), Point(3, 4))
+        previous = Window.default_timeout
+
+        try:
+            Window.set_default_timeout(2.5)
+            with patch("litewinwrap.match.find", return_value=found) as find:
+                self.assertIs(window.find_target(target), found)
+
+            find.assert_called_once_with(
+                HWND(123),
+                target,
+                threshold=0.9,
+                timeout=2.5,
+                overlap=0.3,
+                retry_on_ambiguity=False,
+            )
+        finally:
+            Window.set_default_timeout(previous)
+
+    def test_explicit_zero_timeout_overrides_default(self) -> None:
+        window = Window(HWND(123))
+        target = Target("button", np.zeros((2, 2, 3), dtype=np.uint8))
+        found = Match("button", 0.99, Rect(2, 3, 4, 5), Point(3, 4))
+        previous = Window.default_timeout
+
+        try:
+            Window.set_default_timeout(2.5)
+            with patch("litewinwrap.match.find", return_value=found) as find:
+                self.assertIs(window.find_target(target, timeout=0.0), found)
+
+            self.assertEqual(find.call_args.kwargs["timeout"], 0.0)
+        finally:
+            Window.set_default_timeout(previous)
+
+    def test_default_timeout_must_be_finite_and_non_negative(self) -> None:
+        for timeout in (-1.0, float("inf"), float("nan")):
+            with self.subTest(timeout=timeout):
+                with self.assertRaises(ValueError):
+                    Window.set_default_timeout(timeout)
+
+    def test_default_post_click_delay_is_configurable(self) -> None:
+        window = Window(HWND(123))
+        target = Target("button", np.zeros((2, 2, 3), dtype=np.uint8))
+        found = Match("button", 0.99, Rect(2, 3, 4, 5), Point(3, 4))
+        previous = Window.default_post_click_delay
+
+        try:
+            Window.set_default_post_click_delay(0.3)
+            with patch("litewinwrap.match.click", return_value=found) as click:
+                self.assertIs(window.click_target(target), found)
+
+            self.assertEqual(click.call_args.kwargs["wait_after"], 0.3)
+        finally:
+            Window.set_default_post_click_delay(previous)
+
     def test_title_is_queried_on_every_access(self) -> None:
         window = Window(HWND(123))
         with patch(
@@ -96,6 +154,7 @@ class WindowTests(unittest.TestCase):
             overlap=0.3,
             retry_on_ambiguity=True,
             button="left",
+            wait_after=0.15,
         )
         click_best.assert_called_once_with(
             HWND(123),
@@ -104,6 +163,7 @@ class WindowTests(unittest.TestCase):
             timeout=2.0,
             overlap=0.3,
             button="left",
+            wait_after=0.15,
         )
 
 
