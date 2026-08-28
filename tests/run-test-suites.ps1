@@ -8,6 +8,7 @@ $suites = @(
     "tool_icon",
     "ui_layout",
     "tooltip",
+    "resource_tree",
     "resource_ops",
     "resource_watcher",
     "history",
