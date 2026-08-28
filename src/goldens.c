@@ -228,6 +228,14 @@ static void delete_resource_pair(const wchar_t *png_path) {
     DeleteFileW(json);
 }
 
+static void cleanup_staged_directory(const wchar_t *path, BOOL delete_tree) {
+    if (!path || !path[0]) return;
+    if (delete_tree) golden_delete_directory_tree(path);
+    wchar_t parent[MAX_PATH * 4];
+    if (golden_path_copy(path, parent, _countof(parent)) &&
+        PathRemoveFileSpecW(parent)) RemoveDirectoryW(parent);
+}
+
 static void discard_history_entry(GoldenHistoryEntry *entry, void *context) {
     UNREFERENCED_PARAMETER(context);
     if (entry->kind == GOLDEN_HISTORY_CREATE_PNG && entry->staged)
@@ -237,6 +245,9 @@ static void discard_history_entry(GoldenHistoryEntry *entry, void *context) {
         DeleteFileW(entry->auxiliary);
     } else if (entry->kind == GOLDEN_HISTORY_DELETE_PNG && entry->staged)
         delete_resource_pair(entry->destination);
+    else if (entry->kind == GOLDEN_HISTORY_DELETE_DIRECTORY) {
+        cleanup_staged_directory(entry->destination, entry->staged);
+    }
     else if (entry->kind == GOLDEN_HISTORY_REPLACE_MOVE_PNG && entry->staged)
         delete_resource_pair(entry->auxiliary);
 }
@@ -1699,7 +1710,10 @@ static ResourceTreeNode *selected_tree_node(void) {
 static BOOL resource_delete_available(void) {
     HWND focus = GetFocus();
     ResourceTreeNode *node = selected_tree_node();
-    return node && node->kind == RESOURCE_PNG && node->path &&
+    BOOL deletable = node && node->path &&
+        (node->kind == RESOURCE_PNG ||
+         (node->kind == RESOURCE_DIRECTORY && _wcsicmp(node->path, g.root)));
+    return deletable &&
            (focus == g.tree || IsChild(g.tree, focus));
 }
 
@@ -1756,7 +1770,10 @@ static void update_menu_availability(void) {
                              root_available && golden_clipboard_has_image());
     set_menu_command_enabled(g.edit_menu, ID_RENAME, tree_rename_available());
     BOOL deleting_resource = resource_delete_available();
+    ResourceTreeNode *delete_node = deleting_resource ? selected_tree_node() : NULL;
     ModifyMenuW(g.edit_menu, ID_DELETE, MF_BYCOMMAND | MF_STRING, ID_DELETE,
+                delete_node && delete_node->kind == RESOURCE_DIRECTORY ?
+                                    L"Delete Folder…\tDel" :
                 deleting_resource ? L"Delete PNG and Sidecar\tDel" :
                                     L"Delete Annotation\tDel");
     set_menu_command_enabled(g.edit_menu, ID_DELETE, delete_action_available());
@@ -2190,6 +2207,55 @@ static BOOL apply_resource_history(GoldenHistoryEntry *entry, BOOL undo) {
         return TRUE;
     }
 
+    if (entry->kind == GOLDEN_HISTORY_DELETE_DIRECTORY) {
+        const wchar_t *source = undo ? entry->destination : entry->source;
+        const wchar_t *destination = undo ? entry->source : entry->destination;
+        BOOL deleting_active = !undo && g.image_path[0] &&
+            golden_path_is_same_or_inside(g.image_path, entry->source);
+        if (deleting_active) {
+            if (!maybe_save() ||
+                !golden_path_copy(g.image_path, entry->auxiliary,
+                                  _countof(entry->auxiliary))) return FALSE;
+        }
+        GoldenDirectoryMoveResult result =
+            golden_move_directory(source, destination);
+        if (result != GOLDEN_DIRECTORY_MOVE_OK) {
+            show_error(result == GOLDEN_DIRECTORY_MOVE_DESTINATION_EXISTS ?
+                undo ?
+                    L"The original folder path is occupied, so the deletion cannot be undone." :
+                    L"The undo-storage path is occupied, so the folder deletion cannot be redone." :
+                undo ? L"Windows could not undo the folder deletion." :
+                       L"Windows could not redo the folder deletion.");
+            return FALSE;
+        }
+        entry->staged = !undo;
+        if (undo) {
+            const wchar_t *selection = entry->source;
+            if (entry->auxiliary[0] && !g.image_path[0]) {
+                if (!load_resource(entry->auxiliary))
+                    show_error(L"The deleted folder was restored, but its previously open PNG could not be reopened.");
+                else
+                    selection = entry->auxiliary;
+            }
+            select_resource_after_refresh(selection);
+        } else {
+            wchar_t parent[MAX_PATH * 4];
+            if (!parent_dir_for(entry->source, parent, _countof(parent)))
+                parent[0] = 0;
+            if (deleting_active) {
+                golden_history_remove_annotations(&g.history);
+                clear_active_resource(parent[0] ? parent : NULL);
+            } else if (golden_path_is_same_or_inside(g.current_dir,
+                                                     entry->source)) {
+                golden_path_copy(parent[0] ? parent : g.root, g.current_dir,
+                                 _countof(g.current_dir));
+                update_status();
+            }
+            select_resource_after_refresh(parent[0] ? parent : g.root);
+        }
+        return TRUE;
+    }
+
     if (entry->kind == GOLDEN_HISTORY_REPLACE_MOVE_PNG) {
         BOOL moved = undo ? move_two_resource_pairs(
             entry->destination, entry->source,
@@ -2463,6 +2529,52 @@ static BOOL make_history_temporary_path(const wchar_t *extension,
     return FALSE;
 }
 
+static BOOL make_history_temporary_directory_path(wchar_t *path,
+                                                  size_t capacity) {
+    static volatile LONG sequence;
+    wchar_t container[MAX_PATH * 4], container_name[64];
+    int length = _snwprintf(container_name, _countof(container_name),
+                            L".goldens-history-%08lx",
+                            (unsigned long)GetCurrentProcessId());
+    if (length < 0 || (size_t)length >= _countof(container_name) ||
+        !golden_path_join(g.root, container_name,
+                          container, _countof(container))) return FALSE;
+    DWORD attributes = GetFileAttributesW(container);
+    BOOL created = FALSE;
+    if (attributes == INVALID_FILE_ATTRIBUTES) {
+        if (!CreateDirectoryW(container, NULL)) return FALSE;
+        created = TRUE;
+        attributes = GetFileAttributesW(container);
+    }
+    if (attributes == INVALID_FILE_ATTRIBUTES ||
+        !(attributes & FILE_ATTRIBUTE_DIRECTORY) ||
+        (attributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
+        if (created) RemoveDirectoryW(container);
+        return FALSE;
+    }
+    DWORD hidden = (attributes | FILE_ATTRIBUTE_HIDDEN |
+                    FILE_ATTRIBUTE_NOT_CONTENT_INDEXED) &
+                   ~(DWORD)FILE_ATTRIBUTE_NORMAL;
+    if (!SetFileAttributesW(container, hidden)) {
+        if (created) RemoveDirectoryW(container);
+        return FALSE;
+    }
+    for (int attempt = 0; attempt < 128; ++attempt) {
+        LONG value = InterlockedIncrement(&sequence);
+        wchar_t name[64];
+        length = _snwprintf(name, _countof(name), L"folder-%08lx",
+                            (unsigned long)value);
+        if (length < 0 || (size_t)length >= _countof(name) ||
+            !golden_path_join(container, name, path, capacity)) return FALSE;
+        if (GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES) {
+            DWORD error = GetLastError();
+            if (error == ERROR_FILE_NOT_FOUND ||
+                error == ERROR_PATH_NOT_FOUND) return TRUE;
+        }
+    }
+    return FALSE;
+}
+
 static BOOL resource_pair_path_available(const wchar_t *png_path) {
     wchar_t json_path[MAX_PATH * 4];
     return png_path &&
@@ -2525,7 +2637,60 @@ static void record_created_png(const wchar_t *path,
 
 static void delete_selected_resource(void) {
     ResourceTreeNode *node = selected_tree_node();
-    if (!node || node->kind != RESOURCE_PNG || !node->path) return;
+    if (!node || !node->path) return;
+    if (node->kind == RESOURCE_DIRECTORY) {
+        if (!_wcsicmp(node->path, g.root)) return;
+        wchar_t source[MAX_PATH * 4], parent[MAX_PATH * 4];
+        wchar_t staged[MAX_PATH * 4], active_image[MAX_PATH * 4] = L"";
+        if (!golden_path_copy(node->path, source, _countof(source)) ||
+            !parent_dir_for(source, parent, _countof(parent))) {
+            show_error(L"The selected folder path is too long.");
+            return;
+        }
+        wchar_t message[MAX_PATH * 4 + 256];
+        _snwprintf(message, _countof(message),
+            L"Delete the folder '%s' and everything inside it?\n\n"
+            L"You can undo this with Ctrl+Z.", PathFindFileNameW(source));
+        if (MessageBoxW(g.main, message, APP_NAME,
+                        MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES)
+            return;
+        BOOL active_inside = g.image_path[0] &&
+            golden_path_is_same_or_inside(g.image_path, source);
+        if (active_inside) {
+            if (!maybe_save()) return;
+            if (!golden_path_copy(g.image_path, active_image,
+                                  _countof(active_image))) return;
+        }
+        if (!make_history_temporary_directory_path(staged,
+                                                   _countof(staged))) {
+            show_error(L"Goldens could not reserve recoverable undo storage for the folder deletion.");
+            return;
+        }
+        GoldenDirectoryMoveResult result =
+            golden_move_directory(source, staged);
+        if (result != GOLDEN_DIRECTORY_MOVE_OK) {
+            cleanup_staged_directory(staged, FALSE);
+            show_error(result == GOLDEN_DIRECTORY_MOVE_DESTINATION_EXISTS ?
+                L"Goldens could not reserve a unique undo location for the folder." :
+                L"Windows could not move the folder into recoverable undo storage.");
+            return;
+        }
+        if (active_inside) {
+            golden_history_remove_annotations(&g.history);
+            clear_active_resource(parent);
+        } else if (golden_path_is_same_or_inside(g.current_dir, source)) {
+            golden_path_copy(parent, g.current_dir, _countof(g.current_dir));
+            update_status();
+        }
+        GoldenHistoryEntry entry;
+        golden_history_entry_resource(&entry,
+            GOLDEN_HISTORY_DELETE_DIRECTORY, source, staged, active_image);
+        entry.staged = TRUE;
+        golden_history_push_new(&g.history, &entry);
+        select_resource_after_refresh(parent);
+        return;
+    }
+    if (node->kind != RESOURCE_PNG) return;
     wchar_t source[MAX_PATH * 4], parent[MAX_PATH * 4], staged[MAX_PATH * 4];
     if (!golden_path_copy(node->path, source, _countof(source)) ||
         !parent_dir_for(source, parent, _countof(parent))) {
