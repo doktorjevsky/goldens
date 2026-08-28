@@ -3150,7 +3150,7 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_TIMER:
         if (wp == RESOURCE_TREE_TIMER) {
-            if (g.resource_dragging) {
+            if (g.resource_dragging || TreeView_GetEditControl(g.tree)) {
                 if (!SetTimer(hwnd, RESOURCE_TREE_TIMER,
                               RESOURCE_TREE_COALESCE_MS, NULL))
                     PostMessageW(hwnd, WM_TIMER, RESOURCE_TREE_TIMER, 0);
