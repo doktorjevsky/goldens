@@ -3261,9 +3261,9 @@ static HMENU create_main_menu(void) {
     AppendMenuW(edit, MF_STRING, ID_DELETE, L"Delete Annotation\tDel");
     AppendMenuW(edit, MF_STRING, ID_CLEAR_CLICK, L"Clear Click Point");
     AppendMenuW(view, MF_STRING, ID_FIT, L"Fit Image\t0");
-    AppendMenuW(view, MF_STRING, ID_ZOOM_OUT, L"Zoom Out\tCtrl+-");
-    AppendMenuW(view, MF_STRING, ID_ZOOM_IN, L"Zoom In\tCtrl++");
     AppendMenuW(view, MF_STRING, ID_ACTUAL, L"Actual Size\t1");
+    AppendMenuW(view, MF_STRING, ID_ZOOM_IN, L"Zoom In\tCtrl++");
+    AppendMenuW(view, MF_STRING, ID_ZOOM_OUT, L"Zoom Out\tCtrl+-");
     AppendMenuW(capture, MF_STRING, ID_CAPTURE, L"New Capture…");
     AppendMenuW(capture, MF_STRING, ID_RECAPTURE, L"Recapture Current Resource");
     g.file_menu = file;
