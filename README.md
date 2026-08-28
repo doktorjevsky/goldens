@@ -109,20 +109,18 @@ destination to the corresponding directory.
   rename/delete/click clearing, image view controls, resource refresh and
   folder operations are grayed whenever their required selection or
   resource is unavailable.
-- While Goldens is running, **F8** captures the foreground application's root
-  window and its visible owned top-level windows as a bundle. The shortcut is
+- While Goldens is running, **F8** captures a screen-composited crop containing
+  the foreground application's root window and its visible owned top-level
+  windows. The shortcut is
   registered globally by default; **Capture → Listen for F8** releases or
   reclaims it immediately, and the preference persists across restarts. The
   status bar reports whether listening is on. If another application already
   owns the global shortcut, Goldens turns listening off and explains why.
   Goldens does not change focus before capture, so menus, dropdowns, and hover
-  state remain intact. After the pixels are safely stored, Goldens asks for the
-  bundle folder name; cancelling discards the pending capture.
-- Every bundle contains separate PNG/JSON resource pairs for the root and its
-  visible owned windows, plus `scene.png`, a screen-composited crop of their
-  combined visible bounds, and a versioned `.goldens` manifest. Files are built
-  in hidden staging storage and published under the chosen name only when the
-  bundle is complete. Goldens then opens `scene.png`. Every capture is a bundle.
+  state remain intact. The capture is stored directly in the selected resource
+  directory as `image.png` with an empty matching annotation sidecar; when that
+  name is occupied, Goldens adds a numeric suffix. The new image is opened,
+  selected in the resource tree, and placed into inline rename mode.
 - Use **Fit**, **−**, **+**, or the mouse wheel to control zoom. Wheel zoom keeps
   the image point beneath the mouse pointer in place. **View → Actual
   Size** (or **1**) switches to 100%. With Select, drag an image background or
@@ -161,15 +159,14 @@ recovery after rollback failure, mixed ring-buffer history ordering, branching,
 capacity eviction, failed-action retry, and saved-state comparison,
 folder create/move/delete undo/redo round trips, staged-tree cleanup and subtree
 rejection, orphan-sidecar
-collision safety, atomic-write failure preservation,
-lossless BGRA PNG encode/decode and replacement, and isolated window capture
-with removal of invisible resize-border pixels from `PrintWindow` frames. PNG
+collision safety, atomic-write failure preservation, and
+lossless BGRA PNG encode/decode and replacement. PNG
 coverage includes all 161 valid PngSuite images, comparison with the
 independent LodePNG decoder, encoded signature/chunk-order/CRC validation,
 padded-stride and malformed-input cases, and exact lossless BGRA/alpha fidelity.
-Bundle coverage includes root-owner grouping, unrelated-window exclusion,
-hidden-window handling, destination collision safety, and generated bundle
-resources when an interactive desktop is available.
+Scene-capture coverage includes destination collision safety and generation of
+a single screen-composited PNG/JSON resource when an interactive desktop is
+available.
 
 Run `install-hooks.bat` once after cloning. It configures the versioned
 `.githooks` directory. Both pre-commit and pre-push run the complete Windows

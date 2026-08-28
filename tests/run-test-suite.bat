@@ -7,7 +7,7 @@ set "CC=x86_64-w64-mingw32-clang.exe"
 where %CC% >nul 2>nul
 if errorlevel 1 set "CC=C:\tools\llvm-mingw-20260616-ucrt-x86_64\bin\x86_64-w64-mingw32-clang.exe"
 
-for %%S in (model render tool_icon ui_layout tooltip resource_tree resource_ops resource_watcher history atomic_file png_io window_capture capture_bundle) do (
+for %%S in (model render tool_icon ui_layout tooltip resource_tree resource_ops resource_watcher history atomic_file png_io scene_capture) do (
   if /i "%~1"=="%%S" goto suite_%%S
 )
 
@@ -103,22 +103,13 @@ if errorlevel 1 exit /b 1
 build\png_io_tests.exe
 exit /b %errorlevel%
 
-:suite_window_capture
+:suite_scene_capture
 %CC% -std=c17 -O2 -Wall -Wextra -DUNICODE -D_UNICODE -DCOBJMACROS ^
   -D_WIN32_WINNT=0x0A00 -DWINVER=0x0A00 ^
-  tests\window_capture_tests.c src\window_capture.c src\image_io.c src\atomic_file.c ^
-  -o build\window_capture_tests.exe -ldwmapi -lgdi32 -luser32 -lole32 -luuid -lwindowscodecs
-if errorlevel 1 exit /b 1
-build\window_capture_tests.exe
-exit /b %errorlevel%
-
-:suite_capture_bundle
-%CC% -std=c17 -O2 -Wall -Wextra -DUNICODE -D_UNICODE -DCOBJMACROS ^
-  -D_WIN32_WINNT=0x0A00 -DWINVER=0x0A00 ^
-  tests\capture_bundle_tests.c src\capture_bundle.c src\window_capture.c ^
+  tests\scene_capture_tests.c src\scene_capture.c ^
   src\image_io.c src\atomic_file.c src\resource_ops.c ^
-  -o build\capture_bundle_tests.exe ^
+  -o build\scene_capture_tests.exe ^
   -ldwmapi -lgdi32 -luser32 -lole32 -luuid -lwindowscodecs
 if errorlevel 1 exit /b 1
-build\capture_bundle_tests.exe
+build\scene_capture_tests.exe
 exit /b %errorlevel%

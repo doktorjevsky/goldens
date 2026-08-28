@@ -13,8 +13,7 @@ $suites = @(
     "history",
     "atomic_file",
     "png_io",
-    "window_capture",
-    "capture_bundle"
+    "scene_capture"
 )
 
 $jobCount = 2
