@@ -13,6 +13,8 @@ static BOOL ends_with_png(const wchar_t *path) {
     return length >= 4 && !_wcsicmp(path + length - 4, L".png");
 }
 
+static BOOL read_png_path(wchar_t *path, size_t capacity);
+
 static HGLOBAL make_dib(const BYTE *pixels, UINT width, UINT height,
                         UINT stride) {
     if (!pixels || !width || !height || width > UINT32_MAX / 4 ||
@@ -95,10 +97,31 @@ BOOL golden_clipboard_copy_image(HWND owner, const BYTE *pixels,
 }
 
 BOOL golden_clipboard_has_image(void) {
-    return IsClipboardFormatAvailable(CF_HDROP) ||
-           IsClipboardFormatAvailable(CF_DIBV5) ||
-           IsClipboardFormatAvailable(CF_DIB) ||
-           IsClipboardFormatAvailable(CF_BITMAP);
+    /* Menu state is refreshed often, so inspect each clipboard value once. */
+    static DWORD cached_sequence;
+    static BOOL cache_initialized;
+    static BOOL cached_result;
+    DWORD sequence = GetClipboardSequenceNumber();
+    if (cache_initialized && sequence && sequence == cached_sequence)
+        return cached_result;
+
+    BOOL available = IsClipboardFormatAvailable(CF_DIBV5) ||
+                     IsClipboardFormatAvailable(CF_DIB) ||
+                     IsClipboardFormatAvailable(CF_BITMAP);
+    if (!available && IsClipboardFormatAvailable(CF_HDROP)) {
+        wchar_t path[MAX_PATH * 4];
+        if (!OpenClipboard(NULL)) return FALSE;
+        available = read_png_path(path, _countof(path));
+        CloseClipboard();
+    }
+
+    DWORD confirmed_sequence = GetClipboardSequenceNumber();
+    if (sequence && sequence == confirmed_sequence) {
+        cached_sequence = sequence;
+        cached_result = available;
+        cache_initialized = TRUE;
+    }
+    return available;
 }
 
 static BOOL read_png_path(wchar_t *path, size_t capacity) {
