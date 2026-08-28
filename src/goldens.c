@@ -3250,7 +3250,7 @@ static HMENU create_main_menu(void) {
     AppendMenuW(file, MF_SEPARATOR, 0, NULL);
     AppendMenuW(file, MF_STRING, ID_SAVE, L"Save Annotations\tCtrl+S");
     AppendMenuW(file, MF_SEPARATOR, 0, NULL);
-    AppendMenuW(file, MF_STRING, ID_EXIT, L"Exit");
+    AppendMenuW(file, MF_STRING, ID_EXIT, L"Exit\tCtrl+Q");
     AppendMenuW(edit, MF_STRING, ID_UNDO, L"Undo\tCtrl+Z");
     AppendMenuW(edit, MF_STRING, ID_REDO, L"Redo\tCtrl+Y");
     AppendMenuW(edit, MF_SEPARATOR, 0, NULL);
@@ -3756,6 +3756,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR command_line, 
         {FVIRTKEY | FCONTROL, 'O', ID_OPEN},
         {FVIRTKEY | FCONTROL, 'N', ID_NEW_FOLDER},
         {FVIRTKEY | FCONTROL, 'S', ID_SAVE},
+        {FVIRTKEY | FCONTROL, 'Q', ID_EXIT},
         {FVIRTKEY | FCONTROL, 'Z', ID_UNDO}, {FVIRTKEY | FCONTROL, 'Y', ID_REDO},
         {FVIRTKEY | FCONTROL, 'C', ID_COPY}, {FVIRTKEY | FCONTROL, 'V', ID_PASTE},
         {FVIRTKEY, VK_F2, ID_RENAME},
