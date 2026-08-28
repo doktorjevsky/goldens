@@ -132,7 +132,10 @@ destination to the corresponding directory.
 ## Tests
 
 Run `test.bat`. It first builds the shipped application with the strict
-production diagnostics, then runs the native test suite. The suite covers
+production diagnostics, then compiles and runs the independent native test
+suites in parallel. By default it runs two jobs at a time; set
+`GOLDENS_TEST_JOBS` to a positive integer to adjust the concurrency. The
+suite covers
 annotation names and geometry,
 click normalization, viewport transforms, strict and order-independent JSON
 parsing, arbitrarily long unknown keys, Unicode and escape round trips,
