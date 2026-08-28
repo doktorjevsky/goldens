@@ -1769,13 +1769,6 @@ static void update_menu_availability(void) {
     set_menu_command_enabled(g.edit_menu, ID_PASTE,
                              root_available && golden_clipboard_has_image());
     set_menu_command_enabled(g.edit_menu, ID_RENAME, tree_rename_available());
-    BOOL deleting_resource = resource_delete_available();
-    ResourceTreeNode *delete_node = deleting_resource ? selected_tree_node() : NULL;
-    ModifyMenuW(g.edit_menu, ID_DELETE, MF_BYCOMMAND | MF_STRING, ID_DELETE,
-                delete_node && delete_node->kind == RESOURCE_DIRECTORY ?
-                                    L"Delete Folder…\tDel" :
-                deleting_resource ? L"Delete PNG and Sidecar\tDel" :
-                                    L"Delete Annotation\tDel");
     set_menu_command_enabled(g.edit_menu, ID_DELETE, delete_action_available());
     set_menu_command_enabled(g.edit_menu, ID_CLEAR_CLICK,
                              click_clear_available());
@@ -3258,7 +3251,7 @@ static HMENU create_main_menu(void) {
     AppendMenuW(edit, MF_STRING, ID_PASTE, L"Paste Image\tCtrl+V");
     AppendMenuW(edit, MF_SEPARATOR, 0, NULL);
     AppendMenuW(edit, MF_STRING, ID_RENAME, L"Rename Selection\tF2");
-    AppendMenuW(edit, MF_STRING, ID_DELETE, L"Delete Annotation\tDel");
+    AppendMenuW(edit, MF_STRING, ID_DELETE, L"Delete\tDel");
     AppendMenuW(edit, MF_STRING, ID_CLEAR_CLICK, L"Clear Click Point");
     AppendMenuW(view, MF_STRING, ID_FIT, L"Fit Image\t0");
     AppendMenuW(view, MF_STRING, ID_ACTUAL, L"Actual Size\t1");
