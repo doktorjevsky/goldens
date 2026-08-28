@@ -78,18 +78,6 @@ static void test_viewport_fidelity(void) {
     CHECK(fabs(zoomed_client_y - anchor.y) <= 0.5);
 }
 
-static void test_window_reconciliation(void) {
-    GoldenWindowInfo before[2] = {
-        {1, L"alpha.exe", L"First"}, {2, L"beta.exe", L"Second"}
-    };
-    GoldenWindowInfo same[2];
-    memcpy(same, before, sizeof(before));
-    CHECK(golden_window_lists_equal(before, 2, same, 2));
-    same[1].title[0] = L'X';
-    CHECK(!golden_window_lists_equal(before, 2, same, 2));
-    CHECK(!golden_window_lists_equal(before, 2, before, 1));
-}
-
 static void test_document_round_trip(void) {
     Annotation source[2] = {0};
     wcscpy(source[0].name, L"Save \"button\"");
@@ -366,7 +354,6 @@ int main(void) {
     test_annotation_names();
     test_rectangles_and_clicks();
     test_viewport_fidelity();
-    test_window_reconciliation();
     test_document_round_trip();
     test_document_special_names();
     test_document_valid_variants();

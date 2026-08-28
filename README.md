@@ -83,21 +83,18 @@ destination to the corresponding directory.
   images copied from other applications can also be pasted as new named PNG
   resources. Resource-folder expansion is preserved across refreshes, and the
   paste destination opens automatically. Pasted resources participate in
-  undo/redo like new captures.
+  undo/redo.
   A persistent transaction journal completes or rolls back an
   interrupted pair move on refresh or next startup, including the case where
   Windows could not perform the immediate PNG rollback. Moves never
   merge folders or silently overwrite an existing PNG, folder, or JSON sidecar. Folder
-  creation, capture/recapture, and PNG/folder moves or renames join annotation edits in the ordered
+  creation and PNG/folder moves or renames join annotation edits in the ordered
   **Ctrl+Z**/**Ctrl+Y** undo history. An undo blocked by an externally created
   collision or a now-nonempty folder remains retryable after the conflict is fixed.
   The history retains the latest 32 actions. Annotation snapshots allocate only
-  the entries that need them, and recoverable capture versions are deleted when
-  their entry is evicted, replaced by a new branch, or the application exits.
-  Clicking blank space in either tree deselects that source. Deselecting an
-  annotation first returns selection to its parent PNG. If a displayed PNG or
-  window is deselected, the editor falls back to the source selected in the
-  other tree or becomes empty.
+  the entries that need them. Clicking blank space in the resource tree
+  deselects that source. Deselecting an annotation first returns selection to
+  its parent PNG; deselecting a displayed PNG empties the editor.
 - The resource tree watches the open folder and all of its subfolders. PNGs and
   directories added, moved, renamed, or removed in Explorer appear
   automatically, while expanded folders and the current selection are
@@ -110,34 +107,33 @@ destination to the corresponding directory.
   are unsaved changes. Save is grayed while annotations are up to date. Menu
   commands are refreshed whenever a menu opens: Undo/Redo, annotation
   rename/delete/click clearing, image view controls, resource refresh and
-  folder/capture operations are grayed whenever their required selection or
+  folder operations are grayed whenever their required selection or
   resource is unavailable.
-- Select a window in the right column to start a continuously refreshed,
-  asynchronous bitmap preview in the center, then use **Capture** or
-  **Recapture** beside the window list. Preview mode uses **Select** for panning and
-  disables the annotation tools until an editable resource is selected again.
-  A persistent worker coalesces stale requests and alternates between two
-  reusable capture surfaces, avoiding a thread, bitmap allocation, and pixel
-  copy for every frame. Preview refresh and window enumeration pause while
-  panning so pointer movement remains responsive. If the preview service cannot
-  start, Goldens reports the failure and closes instead of silently leaving
-  preview controls inoperative.
-  Capture is available only for a selected window; Recapture additionally
-  requires a selected PNG or one of its annotations.
-  Open, closed, minimized, and renamed windows are reconciled automatically.
-- The contextual strip says either **Editing resource** or **Previewing
-  window**; generic panel-title rows have been removed.
+- While Goldens is running, **F8** captures the foreground application's root
+  window and its visible owned top-level windows as a bundle. The shortcut is
+  registered globally by default; **Capture → Listen for F8** releases or
+  reclaims it immediately, and the preference persists across restarts. The
+  status bar reports whether listening is on. If another application already
+  owns the global shortcut, Goldens turns listening off and explains why.
+  Goldens does not change focus before capture, so menus, dropdowns, and hover
+  state remain intact. After the pixels are safely stored, Goldens asks for the
+  bundle folder name; cancelling discards the pending capture.
+- Every bundle contains separate PNG/JSON resource pairs for the root and its
+  visible owned windows, plus `scene.png`, a screen-composited crop of their
+  combined visible bounds, and a versioned `.goldens` manifest. Files are built
+  in hidden staging storage and published under the chosen name only when the
+  bundle is complete. Goldens then opens `scene.png`. Every capture is a bundle.
 - Use **Fit**, **−**, **+**, or the mouse wheel to control zoom. Wheel zoom keeps
   the image point beneath the mouse pointer in place. **View → Actual
   Size** (or **1**) switches to 100%. With Select, drag an image background or
-  preview to pan; middle-drag also works from any tool. At 100%, image pixels are mapped exactly to
+  image background to pan; middle-drag also works from any tool. At 100%, image pixels are mapped exactly to
   display pixels; scaled views use halftone filtering. The editor is
   double-buffered so boundaries remain above the image throughout a drag.
-- The three-column layout is responsive and DPI-aware. Controls are repositioned
+- The two-column layout is responsive and DPI-aware. Controls are repositioned
   in a single redraw pass, context text is ellipsized before the zoom controls,
-  and the minimum window size prevents the capture buttons from overlapping.
-- Drag either vertical divider to resize the Resources or Windows column. Drag
-  a pane 48 pixels beyond its minimum width to collapse it; drag its remaining
+  and the minimum window size keeps the editing tools usable.
+- Drag the vertical divider to resize the Resources column. Drag
+  it 48 pixels beyond its minimum width to collapse it; drag its remaining
   visible edge strip inward to restore it. The strip has a wider internal hit
   area so it does not compete with the outer window-resize border. Double-clicking
   the divider also toggles the pane as a fallback. The editor uses the released space.
@@ -154,7 +150,6 @@ click normalization, viewport transforms, strict and order-independent JSON
 parsing, arbitrarily long unknown keys, Unicode and escape round trips,
 malformed/truncated input, numeric and nesting limits, full annotation capacity,
 and invalid-model serialization,
-live top-level window lifecycle reconciliation (including minimized windows),
 recursive resource-folder change notifications, burst coalescing, stress
 coverage, and clean watcher shutdown,
 resource-tree move validation and PNG/JSON moves between directories,
@@ -167,13 +162,14 @@ capacity eviction, failed-action retry, and saved-state comparison,
 folder create/move/delete undo/redo round trips, staged-tree cleanup and subtree
 rejection, orphan-sidecar
 collision safety, atomic-write failure preservation,
-lossless BGRA PNG encode/decode and replacement, and reusable preview capture
-surfaces with removal of invisible resize-border pixels from `PrintWindow`
-frames. PNG coverage includes all 161 valid PngSuite images, comparison with the
+lossless BGRA PNG encode/decode and replacement, and isolated window capture
+with removal of invisible resize-border pixels from `PrintWindow` frames. PNG
+coverage includes all 161 valid PngSuite images, comparison with the
 independent LodePNG decoder, encoded signature/chunk-order/CRC validation,
 padded-stride and malformed-input cases, and exact lossless BGRA/alpha fidelity.
-Preview coverage includes latest-request coalescing, stale-result rejection,
-persistent-worker reuse, failure recovery, and bounded preview shutdown.
+Bundle coverage includes root-owner grouping, unrelated-window exclusion,
+hidden-window handling, destination collision safety, and generated bundle
+resources when an interactive desktop is available.
 
 Run `install-hooks.bat` once after cloning. It configures the versioned
 `.githooks` directory. Both pre-commit and pre-push run the complete Windows

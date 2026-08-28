@@ -3,7 +3,6 @@ Set-StrictMode -Version Latest
 
 $suites = @(
     "model",
-    "window_tracker",
     "render",
     "tool_icon",
     "ui_layout",
@@ -13,8 +12,8 @@ $suites = @(
     "history",
     "atomic_file",
     "png_io",
-    "preview_capture",
-    "preview_service"
+    "window_capture",
+    "capture_bundle"
 )
 
 $jobCount = 2

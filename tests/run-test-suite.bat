@@ -7,7 +7,7 @@ set "CC=x86_64-w64-mingw32-clang.exe"
 where %CC% >nul 2>nul
 if errorlevel 1 set "CC=C:\tools\llvm-mingw-20260616-ucrt-x86_64\bin\x86_64-w64-mingw32-clang.exe"
 
-for %%S in (model window_tracker render tool_icon ui_layout tooltip resource_ops resource_watcher history atomic_file png_io preview_capture preview_service) do (
+for %%S in (model render tool_icon ui_layout tooltip resource_ops resource_watcher history atomic_file png_io window_capture capture_bundle) do (
   if /i "%~1"=="%%S" goto suite_%%S
 )
 
@@ -20,15 +20,6 @@ exit /b 2
   tests\model_tests.c src\model.c src\document.c -o build\model_tests.exe -luser32
 if errorlevel 1 exit /b 1
 build\model_tests.exe
-exit /b %errorlevel%
-
-:suite_window_tracker
-%CC% -std=c17 -O2 -Wall -Wextra -DUNICODE -D_UNICODE ^
-  -D_WIN32_WINNT=0x0A00 -DWINVER=0x0A00 ^
-  tests\window_tracker_tests.c src\window_tracker.c src\model.c ^
-  -o build\window_tracker_tests.exe -luser32
-if errorlevel 1 exit /b 1
-build\window_tracker_tests.exe
 exit /b %errorlevel%
 
 :suite_render
@@ -104,21 +95,22 @@ if errorlevel 1 exit /b 1
 build\png_io_tests.exe
 exit /b %errorlevel%
 
-:suite_preview_capture
+:suite_window_capture
 %CC% -std=c17 -O2 -Wall -Wextra -DUNICODE -D_UNICODE -DCOBJMACROS ^
   -D_WIN32_WINNT=0x0A00 -DWINVER=0x0A00 ^
-  tests\preview_capture_tests.c src\preview_capture.c src\image_io.c src\atomic_file.c ^
-  -o build\preview_capture_tests.exe -ldwmapi -lgdi32 -luser32 -lole32 -luuid -lwindowscodecs
+  tests\window_capture_tests.c src\window_capture.c src\image_io.c src\atomic_file.c ^
+  -o build\window_capture_tests.exe -ldwmapi -lgdi32 -luser32 -lole32 -luuid -lwindowscodecs
 if errorlevel 1 exit /b 1
-build\preview_capture_tests.exe
+build\window_capture_tests.exe
 exit /b %errorlevel%
 
-:suite_preview_service
+:suite_capture_bundle
 %CC% -std=c17 -O2 -Wall -Wextra -DUNICODE -D_UNICODE -DCOBJMACROS ^
   -D_WIN32_WINNT=0x0A00 -DWINVER=0x0A00 ^
-  tests\preview_service_tests.c src\preview_service.c src\preview_capture.c ^
-  src\image_io.c src\atomic_file.c -o build\preview_service_tests.exe ^
+  tests\capture_bundle_tests.c src\capture_bundle.c src\window_capture.c ^
+  src\image_io.c src\atomic_file.c src\resource_ops.c ^
+  -o build\capture_bundle_tests.exe ^
   -ldwmapi -lgdi32 -luser32 -lole32 -luuid -lwindowscodecs
 if errorlevel 1 exit /b 1
-build\preview_service_tests.exe
+build\capture_bundle_tests.exe
 exit /b %errorlevel%

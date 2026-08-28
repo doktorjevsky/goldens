@@ -106,13 +106,3 @@ BOOL golden_view_to_image(const GoldenViewport *viewport, POINT client,
     image->y = min((LONG)image_height - 1, max(0L, image->y));
     return TRUE;
 }
-
-BOOL golden_window_lists_equal(const GoldenWindowInfo *left, int left_count,
-                               const GoldenWindowInfo *right, int right_count) {
-    if (left_count != right_count) return FALSE;
-    for (int i = 0; i < left_count; ++i) {
-        if (left[i].id != right[i].id || wcscmp(left[i].app, right[i].app) ||
-            wcscmp(left[i].title, right[i].title)) return FALSE;
-    }
-    return TRUE;
-}
