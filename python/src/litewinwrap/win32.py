@@ -55,7 +55,7 @@ class KEYBDINPUT(ctypes.Structure):
         ("wVk", wintypes.WORD),
         ("wScan", wintypes.WORD),
         ("dwFlags", wintypes.DWORD),
-        ("time", wintypes.DWORD),
+        ("time_milliseconds", wintypes.DWORD),
         ("dwExtraInfo", ULONG_PTR),
     ]
 
@@ -66,7 +66,7 @@ class MOUSEINPUT(ctypes.Structure):
         ("dy", wintypes.LONG),
         ("mouseData", wintypes.DWORD),
         ("dwFlags", wintypes.DWORD),
-        ("time", wintypes.DWORD),
+        ("time_milliseconds", wintypes.DWORD),
         ("dwExtraInfo", ULONG_PTR),
     ]
 
@@ -450,7 +450,7 @@ def get_system_metric(index: int) -> int:
     return int(_user32.GetSystemMetrics(index))
 
 
-def get_double_click_time() -> float:
+def get_double_click_seconds() -> float:
     _require_windows()
     assert _user32 is not None
     return float(_user32.GetDoubleClickTime()) / 1000.0

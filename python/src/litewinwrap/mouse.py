@@ -51,7 +51,7 @@ def _input(flags: int, *, dx: int = 0, dy: int = 0, data: int = 0) -> win32.INPU
         dy=dy,
         mouseData=data & 0xFFFFFFFF,
         dwFlags=flags,
-        time=0,
+        time_milliseconds=0,
         dwExtraInfo=0,
     )
     return value
@@ -102,15 +102,15 @@ def click(
     *,
     button: Button = "left",
     count: int = 1,
-    interval: float | None = None,
+    interval_seconds: float | None = None,
 ) -> int:
     if count <= 0:
         raise ValueError("Click count must be positive")
     sent = move_to(point) if point is not None else 0
     down_flags, down_data = _DOWN[button]
     up_flags, up_data = _UP[button]
-    if interval is None:
-        interval = win32.get_double_click_time() * 0.5
+    if interval_seconds is None:
+        interval_seconds = win32.get_double_click_seconds() * 0.5
 
     for index in range(count):
         sent += win32.send_input(
@@ -120,7 +120,7 @@ def click(
             ]
         )
         if index + 1 < count:
-            time.sleep(max(0.0, interval))
+            time.sleep(max(0.0, interval_seconds))
     return sent
 
 

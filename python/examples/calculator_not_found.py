@@ -4,42 +4,33 @@ import re
 import subprocess
 from pathlib import Path
 
-from litewinwrap import Goldens, Window, win32
-from litewinwrap.match import TargetNotFoundError
+from litewinwrap import Automation, Goldens, TargetNotFoundError
 
 
 def main() -> None:
-    win32.enable_per_monitor_dpi_awareness()
+    automation = Automation(threshold=0.92)
     subprocess.Popen(["calc.exe"])
 
-    calculator = Window.find(
+    calculator = automation.find_window(
         re.compile(r"^Calculator$", re.IGNORECASE),
-        timeout=5.0,
+        timeout_seconds=5.0,
     )
-    calculator.focus(timeout=2.0)
+    calculator.focus()
     targets = Goldens.from_png(Path(__file__).with_name("calculator.png"))
 
     # The not_found crop represents Calculator before its display changes.
     # Pressing a nonzero digit makes that visual state disappear.
-    pressed = calculator.click_target(
-        targets["calculator/button_7"],
-        threshold=0.92,
-        timeout=2.0,
-    )
+    pressed = calculator.click(targets["calculator/button_7"])
     print(f"Pressed button_7 at {pressed.click}")
 
     try:
-        calculator.find_target(
-            targets["calculator/not_found"],
-            threshold=0.92,
-            timeout=2.0,
-        )
+        calculator.locate(targets["calculator/not_found"])
     except TargetNotFoundError as error:
         print(f"Target {error.target.name!r} was not found, as expected")
         print(f"  threshold: {error.threshold:.4f}")
         print(f"  best score: {error.best_score:.4f}")
         print(f"  attempts: {error.attempts}")
-        print(f"  elapsed: {error.elapsed:.3f}s")
+        print(f"  elapsed: {error.elapsed_seconds:.3f}s")
         if error.last_capture is not None:
             print(f"  last capture: {error.last_capture.rect}")
     else:

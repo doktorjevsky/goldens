@@ -11,8 +11,8 @@ from .types import Capture, HWND, Match, Point, Rect, Target
 from .window import Window
 
 
-_POLL_INTERVAL = 0.05
-_POST_CLICK_DELAY = 0.15
+_POLL_INTERVAL_SECONDS = 0.05
+_POST_CLICK_DELAY_SECONDS = 0.15
 
 
 class TargetNotFoundError(LookupError):
@@ -22,24 +22,24 @@ class TargetNotFoundError(LookupError):
         *,
         threshold: float,
         best_score: float,
-        elapsed: float,
+        elapsed_seconds: float,
         attempts: int,
         last_capture: Capture | None,
-    ):
+    ) -> None:
         self.target = target
         self.threshold = threshold
         self.best_score = best_score
-        self.elapsed = elapsed
+        self.elapsed_seconds = elapsed_seconds
         self.attempts = attempts
         self.last_capture = last_capture
         super().__init__(
-            f"Target {target.name!r} was not found within {elapsed:.3f}s; "
+            f"Target {target.name!r} was not found within {elapsed_seconds:.3f}s; "
             f"best score {best_score:.4f}, threshold {threshold:.4f}"
         )
 
 
 class TargetAmbiguousError(LookupError):
-    def __init__(self, target: Target, matches: tuple[Match, ...]):
+    def __init__(self, target: Target, matches: tuple[Match, ...]) -> None:
         self.target = target
         self.matches = matches
         super().__init__(
@@ -96,7 +96,11 @@ def _validate(capture_value: Capture, target: Target, threshold: float) -> None:
 def _score_map(capture_value: Capture, target: Target) -> np.ndarray:
     # CCOEFF is discriminating for normal UI crops. SQDIFF handles flat-colour
     # targets for which CCOEFF's variance term is undefined.
-    if float(np.std(target.pixels)) < 1.0:
+    spatial_deviation = np.std(
+        target.pixels.astype(np.float32),
+        axis=(0, 1),
+    )
+    if float(np.max(spatial_deviation)) < 1.0:
         difference = cv2.matchTemplate(
             capture_value.pixels,
             target.pixels,
@@ -213,7 +217,7 @@ def _not_found(
         target,
         threshold=threshold,
         best_score=best_score,
-        elapsed=0.0,
+        elapsed_seconds=0.0,
         attempts=1,
         last_capture=capture_value,
     )
@@ -270,10 +274,10 @@ def find_all(
     target: Target,
     *,
     threshold: float = 0.90,
-    timeout: float = 0.0,
+    timeout_seconds: float = 0.0,
     overlap: float = 0.30,
 ) -> tuple[Match, ...]:
-    deadline = time.monotonic() + max(0.0, timeout)
+    deadline_seconds = time.monotonic() + max(0.0, timeout_seconds)
     while True:
         current = capture(window)
         matches, _best_score = _matches_and_best_score(
@@ -286,10 +290,10 @@ def find_all(
         if matches:
             return matches
 
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
+        remaining_seconds = deadline_seconds - time.monotonic()
+        if remaining_seconds <= 0:
             return ()
-        time.sleep(min(_POLL_INTERVAL, remaining))
+        time.sleep(min(_POLL_INTERVAL_SECONDS, remaining_seconds))
 
 
 def find(
@@ -297,14 +301,14 @@ def find(
     target: Target,
     *,
     threshold: float = 0.90,
-    timeout: float = 0.0,
+    timeout_seconds: float = 0.0,
     overlap: float = 0.30,
     retry_on_ambiguity: bool = False,
 ) -> Match:
     """Wait for one target match, optionally retrying transient ambiguity."""
 
-    started = time.monotonic()
-    deadline = started + max(0.0, timeout)
+    started_seconds = time.monotonic()
+    deadline_seconds = started_seconds + max(0.0, timeout_seconds)
     best_score = -1.0
     attempts = 0
     last_capture: Capture | None = None
@@ -325,20 +329,20 @@ def find(
         if len(matches) > 1 and not retry_on_ambiguity:
             raise TargetAmbiguousError(target, matches)
 
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
+        remaining_seconds = deadline_seconds - time.monotonic()
+        if remaining_seconds <= 0:
             if matches:
                 raise TargetAmbiguousError(target, matches)
-            elapsed = time.monotonic() - started
+            elapsed_seconds = time.monotonic() - started_seconds
             raise TargetNotFoundError(
                 target,
                 threshold=threshold,
                 best_score=best_score,
-                elapsed=elapsed,
+                elapsed_seconds=elapsed_seconds,
                 attempts=attempts,
                 last_capture=last_capture,
             )
-        time.sleep(min(_POLL_INTERVAL, remaining))
+        time.sleep(min(_POLL_INTERVAL_SECONDS, remaining_seconds))
 
 
 def find_best(
@@ -346,11 +350,11 @@ def find_best(
     target: Target,
     *,
     threshold: float = 0.90,
-    timeout: float = 0.0,
+    timeout_seconds: float = 0.0,
     overlap: float = 0.30,
 ) -> Match:
-    started = time.monotonic()
-    deadline = started + max(0.0, timeout)
+    started_seconds = time.monotonic()
+    deadline_seconds = started_seconds + max(0.0, timeout_seconds)
     best_score = -1.0
     attempts = 0
     last_capture: Capture | None = None
@@ -369,18 +373,18 @@ def find_best(
         if matches:
             return matches[0]
 
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            elapsed = time.monotonic() - started
+        remaining_seconds = deadline_seconds - time.monotonic()
+        if remaining_seconds <= 0:
+            elapsed_seconds = time.monotonic() - started_seconds
             raise TargetNotFoundError(
                 target,
                 threshold=threshold,
                 best_score=best_score,
-                elapsed=elapsed,
+                elapsed_seconds=elapsed_seconds,
                 attempts=attempts,
                 last_capture=last_capture,
             )
-        time.sleep(min(_POLL_INTERVAL, remaining))
+        time.sleep(min(_POLL_INTERVAL_SECONDS, remaining_seconds))
 
 
 def click(
@@ -388,25 +392,25 @@ def click(
     target: Target,
     *,
     threshold: float = 0.90,
-    timeout: float = 0.0,
+    timeout_seconds: float = 0.0,
     overlap: float = 0.30,
     retry_on_ambiguity: bool = False,
     button: mouse.Button = "left",
-    wait_after: float = _POST_CLICK_DELAY,
+    wait_after_seconds: float = _POST_CLICK_DELAY_SECONDS,
 ) -> Match:
-    if not isfinite(wait_after) or wait_after < 0.0:
-        raise ValueError("Post-click wait must be a finite non-negative number")
+    if not isfinite(wait_after_seconds) or wait_after_seconds < 0.0:
+        raise ValueError("wait_after_seconds must be a finite non-negative number")
     found = find(
         window,
         target,
         threshold=threshold,
-        timeout=timeout,
+        timeout_seconds=timeout_seconds,
         overlap=overlap,
         retry_on_ambiguity=retry_on_ambiguity,
     )
     mouse.click(found.click, button=button)
-    if wait_after:
-        time.sleep(wait_after)
+    if wait_after_seconds:
+        time.sleep(wait_after_seconds)
     return found
 
 
@@ -415,21 +419,21 @@ def click_best(
     target: Target,
     *,
     threshold: float = 0.90,
-    timeout: float = 0.0,
+    timeout_seconds: float = 0.0,
     overlap: float = 0.30,
     button: mouse.Button = "left",
-    wait_after: float = _POST_CLICK_DELAY,
+    wait_after_seconds: float = _POST_CLICK_DELAY_SECONDS,
 ) -> Match:
-    if not isfinite(wait_after) or wait_after < 0.0:
-        raise ValueError("Post-click wait must be a finite non-negative number")
+    if not isfinite(wait_after_seconds) or wait_after_seconds < 0.0:
+        raise ValueError("wait_after_seconds must be a finite non-negative number")
     found = find_best(
         window,
         target,
         threshold=threshold,
-        timeout=timeout,
+        timeout_seconds=timeout_seconds,
         overlap=overlap,
     )
     mouse.click(found.click, button=button)
-    if wait_after:
-        time.sleep(wait_after)
+    if wait_after_seconds:
+        time.sleep(wait_after_seconds)
     return found

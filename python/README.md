@@ -1,167 +1,226 @@
 # litewinwrap
 
-`litewinwrap` is a small Windows-only scripting layer for finding windows,
-querying their current properties, injecting mouse and keyboard input, and
-finding visual templates with OpenCV.
+`litewinwrap` is a small image-driven Windows desktop automation package. It
+finds windows, locates annotated visual targets, and performs mouse and keyboard
+actions with one consistent timeout and settling policy.
 
-`Window` retains only its HWND. Titles, rectangles, visibility, process IDs,
-parents, and children are always queried from Windows when accessed.
+The package captures the visible desktop. It is intended for interactive
+Windows sessions where the target application is unlocked and unobscured.
 
 ## Install
 
-From this directory:
+This is an alpha release. APIs may change before `1.0`.
+
+Copy the wheel from `dist` to the Windows VM, then install it into a virtual
+environment:
+
+```powershell
+py -m venv C:\Tools\litewinwrap-env
+C:\Tools\litewinwrap-env\Scripts\python -m pip install `
+    C:\Transfer\litewinwrap-0.1.0a1-py3-none-any.whl
+```
+
+For editable development from this directory:
 
 ```powershell
 py -m pip install -e .
 ```
 
-## Shape of the API
+Python 3.11 or later and Windows 11 are required. Creating an `Automation`
+session enables per-monitor DPI awareness before window geometry is queried.
+
+## Quick start
 
 ```python
+from __future__ import annotations
+
 import re
 import subprocess
 from pathlib import Path
 
-from litewinwrap import Goldens, Window, win32
+from litewinwrap import Automation, Goldens
 
-win32.enable_per_monitor_dpi_awareness()
+
+automation = Automation(
+    timeout_seconds=2.0,
+    settle_seconds=0.15,
+    threshold=0.92,
+    focus_before_input=True,
+)
 
 subprocess.Popen(["calc.exe"])
-window = Window.find(
-    re.compile("Calculator", re.IGNORECASE),
-    timeout=5.0,
+calculator = automation.find_window(
+    re.compile(r"^Calculator$", re.IGNORECASE),
+    timeout_seconds=5.0,
 )
+targets = Goldens.from_png(Path("calculator.png"))
+
+calculator.focus()
+calculator.click(targets["calculator/button_1"])
+calculator.click(targets["calculator/button_plus"])
+calculator.click(targets["calculator/button_2"])
+calculator.press("enter")
+```
+
+The session is the policy owner. Every `Window` returned by it inherits the
+same defaults:
+
+- `timeout_seconds`: how long discovery and visual searches may retry;
+- `settle_seconds`: how long actions yield for the UI to repaint afterward;
+- `threshold` and `overlap`: visual-matching defaults;
+- `retry_on_ambiguity`: whether a transient multiple match may be retried;
+- `focus_before_input`: whether clicks and keyboard actions activate their window.
+
+An option supplied to an individual action overrides the session. Explicit
+zero disables waiting:
+
+```python
+calculator.click(target, timeout_seconds=4.0, settle_seconds=0.3)
+calculator.click(target, settle_seconds=0.0)
+calculator.press("ctrl", "q", focus=False)
+```
+
+`None` means “inherit the session.” Explicit values—including `0.0` and
+`False`—always override it for that one call. DPI awareness is necessarily a
+process-level choice rather than a per-action setting; applications that
+already manage it can opt out with `Automation(dpi_awareness="unchanged")`.
+All time-bearing API values include their unit in the name; they currently use
+seconds, for example `timeout_seconds`, `settle_seconds`, and `interval_seconds`.
+
+## Windows
+
+Discovery begins on the session:
+
+```python
+automation.windows()
+automation.find_windows(title="Calculator")
+automation.find_window(title="Calculator")
+```
+
+`find_windows()` is an immediate plural query. `find_window()` waits for
+exactly one result, raising `WindowNotFoundError` or `WindowAmbiguousError`
+otherwise.
+
+A `Window` retains its HWND and originating automation session. Properties are
+always read live from Windows:
+
+```python
+window.title
+window.class_name
+window.rect
+window.process_id
+window.parent
+window.children()
+window.visible
+window.enabled
+window.minimized
+window.foreground
+```
+
+Window state actions use the session settling policy:
+
+```python
 window.focus()
+window.move(100, 100)
+window.resize(900, 700)
+window.restore()
+window.minimize()
+window.maximize()
+window.close()
+```
 
-targets = Goldens.from_root(Path("resources"))
-found = window.click_target(
-    targets["calculator/button_8"],
-    threshold=0.92,
-    timeout=2.0,
-)
+## Visual targets
 
-print(found.score, found.rect, found.click)
+The native Goldens application creates a PNG and adjacent JSON sidecar. The
+sidecar stores named annotation rectangles and optional normalized click points:
+
+```text
+login.png
+login.json
+```
+
+`Goldens.from_png()` validates one pair and qualifies every annotation with the
+PNG stem:
+
+```python
+targets = Goldens.from_png("login.png")
+submit = targets["login/submit"]
 ```
 
 `Goldens.from_root()` recursively discovers annotated PNGs below a resource
-root. Each target is qualified by the PNG's root-relative path without its
-extension, using `/` on every platform. `Goldens.from_png()` loads one PNG/JSON
-pair using the PNG stem as that same namespace. Both forms eagerly validate the
-resources and expose copied, read-only crops through normal mapping operations:
+root. Each identifier uses the PNG's root-relative path without its extension,
+with `/` on every platform:
 
 ```python
-targets["calculator/button_8"]
-targets.get("calculator/button_8")
-"calculator/button_8" in targets
-targets.keys()
-targets.items()
+targets = Goldens.from_root(Path("resources"))
+submit = targets["dialogs/login/submit"]
 ```
 
-For example, an annotation named `submit` in
-`resources/dialogs/login.png` has the identifier `dialogs/login/submit`.
-PNG files without an adjacent JSON sidecar are not targets and are skipped by
-root discovery. Annotation names cannot contain `/`, and identifiers that differ
-only by case are rejected so the mapping remains safe on Windows filesystems.
+Both forms expose copied, read-only crops through normal mapping operations.
+PNG files without an adjacent JSON sidecar are skipped during root discovery.
+Annotation names cannot contain `/`, and identifiers differing only by case are
+rejected so the mapping remains safe on Windows filesystems.
 
-`Window.screenshot()`, `find_target()`, `find_targets()`, and `click_target()`
-take fresh screenshots and retain no target or match state on the window.
-Window and target searches use a two-second timeout by default. Set the
-process-wide default once when an application needs more time to render; an
-explicit timeout on an individual call still takes precedence, and `0.0`
-requests one immediate attempt:
+The primary visual operations take fresh captures and retain no target or match
+state on the window:
 
 ```python
-Window.set_default_timeout(3.0)
+capture = window.capture()
+match = window.locate(submit)
+matches = window.locate_all(submit)
+best = window.locate_best(submit)
+clicked = window.click(submit)
+clicked_best = window.click_best(submit)
 ```
 
-Successful target clicks wait 150 milliseconds before returning so the target
-application can repaint before the next scripted action. The process-wide
-default and individual calls are both configurable:
+`locate()` and `click()` require exactly one distinct occurrence. Choosing the
+highest-scoring occurrence is deliberately explicit. A failed search raises
+`TargetNotFoundError` with the best score and last capture; multiple occurrences
+raise `TargetAmbiguousError`.
+
+## Text and keys
+
+High-level keyboard actions focus the bound window when configured to do so and
+then use the session settling policy:
 
 ```python
-Window.set_default_post_click_delay(0.25)
-window.click_target(target)                  # waits 250 ms
-window.click_target(target, wait_after=0.0)  # no settling delay
+window.type_text("Hello, världen 👋")
+window.press("enter")
+window.press("tab", count=3)
+window.press("ctrl", "q")
+window.press("ctrl", "shift", "s")
 ```
 
-`find_target()` and `click_target()` require exactly one match and report an
-ambiguity if the target occurs more than once. Use `find_targets()` when every
-occurrence is wanted. Choosing the highest-scoring occurrence is deliberately
-explicit through `find_best_target()` or `click_best_target()`.
+Key names are case-insensitive. Letters, digits, modifiers, navigation keys,
+F1–F24, numpad keys, and common media keys are supported. Multiple names form a
+chord and are released in reverse order.
 
-For transient ambiguity caused by animations or other changing UI, pass
-`retry_on_ambiguity=True` together with a timeout. The operation then keeps
-capturing until exactly one match remains. If the last capture is still
-ambiguous at the deadline, it raises `TargetAmbiguousError` with those matches:
+## Advanced primitives
+
+The high-level workflow above is the supported default. The underlying modules
+remain available when exact device or matching control is required:
 
 ```python
-window.click_target(
-    targets["calculator/button_8"],
-    timeout=2.0,
-    retry_on_ambiguity=True,
-)
+from litewinwrap import keyboard, match, mouse, win32
+
+keyboard.type_text("literal Unicode")
+keyboard.press("ctrl", "q")
+mouse.click((100, 200))
+match.match(capture, target)
+win32.get_window_rect(hwnd)
 ```
 
-The equivalent operations on an existing capture are `match.match()`,
-`match.match_all()`, and `match.best_match()`.
+These primitives do not all establish focus or inherit an `Automation`
+session. Integer Win32 virtual-key codes and explicit key down/up operations are
+available here as escape hatches.
 
-`subprocess.Popen` is part of Python's standard library and is deliberately not
-wrapped. Pass an argument list to launch an executable directly. The returned
-object exposes the PID, exit status, `wait`, `terminate`, and the standard I/O
-streams. `Window.find(..., process_id=process.pid)` can wait for the process to
-create its top-level window.
-
-`cmd.exe` is unnecessary for ordinary executables. Invoke it explicitly only
-when the command actually needs shell syntax or a built-in command:
-
-```python
-subprocess.Popen(["cmd.exe", "/d", "/s", "/c", "your shell command"])
-```
-
-Avoid `shell=True` for values assembled from external input.
-
-Type literal Unicode text with `keyboard.write()` or its more descriptive
-`keyboard.type_text()` alias. `keyboard.press()` accepts case-insensitive key
-names; multiple names form a chord and are released in reverse order:
-
-```python
-from litewinwrap import keyboard
-
-window.focus()
-keyboard.press("ctrl", "a")
-keyboard.type_text("Hello, världen 👋")
-keyboard.press("enter")
-keyboard.press("tab", count=3)
-```
-
-`keyboard.down()` and `keyboard.up()` provide explicit control when a key must
-remain held. Integer Win32 virtual-key codes and the existing `write()`,
-`hotkey()`, `key_down()`, and `key_up()` functions remain supported.
-
-`match.click` captures the window from the physical screen, matches the cropped
-annotation, sends a click to its saved normalized click point, and returns the
-`Match` that was clicked.
-
-Screen capture intentionally reflects what is visible on the desktop. Keep the
-interactive desktop unlocked and the target window unobscured.
-
-See [`examples/calculator.py`](examples/calculator.py) for a complete script that
-starts Calculator, loads `calculator.png` and its JSON sidecar, and exercises
-every digit and arithmetic-operation target.
-
-[`examples/calculator_not_found.py`](examples/calculator_not_found.py) changes
-Calculator's display and then demonstrates the structured diagnostics returned
-by `TargetNotFoundError` when the original visual state does not reappear before
-the timeout.
-
-[`examples/calculator_multiple_match.py`](examples/calculator_multiple_match.py)
-presses `1` six times using targets from `calculator.png`, then demonstrates
-`TargetAmbiguousError` using `multiple_match` from `calculator_ones.png`.
+`subprocess.Popen` remains the normal way to launch applications. Pass an
+argument list and avoid `shell=True` for values assembled from external input.
 
 ## Tests
 
-The platform-independent matching and value-behaviour tests run on any system
-with the package dependencies installed:
+Platform-independent policy, matching, format, and delegation tests run on any
+system with the package dependencies installed:
 
 ```powershell
 $env:PYTHONPATH = "src"
@@ -169,3 +228,7 @@ py -m unittest discover -s tests -v
 ```
 
 Live window, capture, and input calls require an interactive Windows desktop.
+The complete Calculator workflows are in [`examples`](examples).
+
+Building, transferring, online installation, and fully offline VM installation
+are documented in [`INSTALLING.md`](INSTALLING.md).

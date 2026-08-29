@@ -50,6 +50,18 @@ class MatchTests(unittest.TestCase):
         self.assertEqual(len(found), 2)
         self.assertEqual({item.rect.left for item in found}, {6, 50})
 
+    def test_spatially_flat_colour_target_does_not_match_everywhere(self) -> None:
+        generator = np.random.default_rng(7)
+        pixels = generator.integers(0, 256, (40, 50, 3), dtype=np.uint8)
+        template = np.empty((8, 9, 3), dtype=np.uint8)
+        template[:] = (10, 80, 170)
+        pixels[17:25, 21:30] = template
+        capture = Capture(pixels, Rect(0, 0, 50, 40))
+
+        found = match_all(capture, Target("colour", template), threshold=0.99)
+
+        self.assertEqual(tuple(item.rect for item in found), (Rect(21, 17, 30, 25),))
+
     def test_match_rejects_multiple_occurrences(self) -> None:
         pixels = np.zeros((60, 80, 3), dtype=np.uint8)
         pixels[5:15, 6:18] = self.template
@@ -87,7 +99,12 @@ class MatchTests(unittest.TestCase):
             patch("litewinwrap.match.mouse.click") as send_click,
             patch("litewinwrap.match.time.sleep") as sleep,
         ):
-            found = click(HWND(123), self.target, threshold=0.99, wait_after=0.2)
+            found = click(
+                HWND(123),
+                self.target,
+                threshold=0.99,
+                wait_after_seconds=0.2,
+            )
 
         send_click.assert_called_once_with(found.click, button="left")
         sleep.assert_called_once_with(0.2)
@@ -108,7 +125,7 @@ class MatchTests(unittest.TestCase):
                 HWND(123),
                 self.target,
                 threshold=0.99,
-                timeout=1.0,
+                timeout_seconds=1.0,
                 retry_on_ambiguity=True,
             )
 
@@ -132,7 +149,7 @@ class MatchTests(unittest.TestCase):
                     HWND(123),
                     self.target,
                     threshold=0.99,
-                    timeout=1.0,
+                    timeout_seconds=1.0,
                 )
 
         capture_window.assert_called_once_with(HWND(123))
@@ -155,7 +172,7 @@ class MatchTests(unittest.TestCase):
                     HWND(123),
                     self.target,
                     threshold=0.99,
-                    timeout=1.0,
+                    timeout_seconds=1.0,
                     retry_on_ambiguity=True,
                 )
 

@@ -1,5 +1,7 @@
 from . import keyboard, match, mouse, win32
+from .automation import Automation
 from .goldens import Goldens, GoldensFormatError
+from .match import TargetAmbiguousError, TargetNotFoundError
 from .types import Capture, HWND, Match, Point, Rect, Target
 from .window import (
     FocusTimeoutError,
@@ -11,6 +13,8 @@ from .window import (
 
 
 __all__ = [
+    "__version__",
+    "Automation",
     "Capture",
     "FocusTimeoutError",
     "Goldens",
@@ -20,6 +24,8 @@ __all__ = [
     "Point",
     "Rect",
     "Target",
+    "TargetAmbiguousError",
+    "TargetNotFoundError",
     "Window",
     "WindowAmbiguousError",
     "WindowCloseTimeoutError",
@@ -30,4 +36,4 @@ __all__ = [
     "win32",
 ]
 
-__version__ = "0.1.0"
+__version__ = "0.1.0a1"

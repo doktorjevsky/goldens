@@ -4,18 +4,18 @@ import re
 import subprocess
 from pathlib import Path
 
-from litewinwrap import Goldens, Window, win32
+from litewinwrap import Automation, Goldens
 
 
 def main() -> None:
-    win32.enable_per_monitor_dpi_awareness()
+    automation = Automation(threshold=0.92)
     subprocess.Popen(["calc.exe"])
 
-    calculator = Window.find(
+    calculator = automation.find_window(
         re.compile(r"^Calculator$", re.IGNORECASE),
-        timeout=5.0,
+        timeout_seconds=5.0,
     )
-    calculator.focus(timeout=2.0)
+    calculator.focus()
     targets = Goldens.from_root(Path(__file__).parent)
 
     # 1234567890 + 9876543210 - 10 * 2 / 5 =
@@ -36,11 +36,7 @@ def main() -> None:
 
     for name in buttons:
         target_name = f"calculator/{name}"
-        found = calculator.click_target(
-            targets[target_name],
-            threshold=0.92,
-            timeout=2.0,
-        )
+        found = calculator.click(targets[target_name])
         print(f"{target_name:<25} score={found.score:.4f} click={found.click}")
 
 
