@@ -6,6 +6,7 @@ import os
 import platform
 import re
 import sys
+import threading
 import time
 import traceback
 from collections.abc import Callable, Iterator, Mapping
@@ -103,6 +104,13 @@ class _Run:
     frames: list[_Frame] = field(default_factory=list)
     capture_errors: list[str] = field(default_factory=list)
     active_hwnd: HWND | None = None
+    sampling_step_id: int | None = None
+    sampling_capture_enabled: bool = True
+    sampling_action_id: int | None = None
+    sampling_action: str = "UI state"
+    sampling_details: dict[str, Any] = field(default_factory=dict)
+    _state_lock: Any = field(default_factory=threading.Lock, repr=False)
+    _capture_lock: Any = field(default_factory=threading.RLock, repr=False)
     _next_action_id: int = 1
     _next_step_id: int = 1
 
@@ -127,6 +135,63 @@ class _Run:
             None,
         )
 
+    def begin_action_sampling(
+        self,
+        *,
+        action_id: int,
+        action: str,
+        details: dict[str, Any],
+        hwnd: HWND | None,
+    ) -> None:
+        with self._state_lock:
+            if hwnd is not None:
+                self.active_hwnd = hwnd
+            self.sampling_action_id = action_id
+            self.sampling_action = action
+            self.sampling_details = dict(details)
+
+    def finish_action_sampling(
+        self,
+        *,
+        action_id: int,
+        hwnd: HWND | None,
+    ) -> None:
+        with self._state_lock:
+            if hwnd is not None:
+                self.active_hwnd = hwnd
+            if self.sampling_action_id == action_id:
+                self.sampling_action_id = None
+                self.sampling_action = "UI state"
+                self.sampling_details = {}
+
+    def enter_step_sampling(
+        self,
+        step_id: int,
+        capture_enabled: bool,
+    ) -> tuple[int | None, bool]:
+        with self._state_lock:
+            previous = (self.sampling_step_id, self.sampling_capture_enabled)
+            self.sampling_step_id = step_id
+            self.sampling_capture_enabled = capture_enabled
+            return previous
+
+    def restore_step_sampling(self, previous: tuple[int | None, bool]) -> None:
+        with self._state_lock:
+            self.sampling_step_id, self.sampling_capture_enabled = previous
+
+    def sampling_snapshot(
+        self,
+    ) -> tuple[HWND | None, int | None, str, str | None, dict[str, Any], bool]:
+        with self._state_lock:
+            return (
+                self.active_hwnd,
+                self.sampling_action_id,
+                self.sampling_action,
+                self.step_title(self.sampling_step_id),
+                dict(self.sampling_details),
+                self.sampling_capture_enabled,
+            )
+
     def capture(
         self,
         *,
@@ -134,37 +199,109 @@ class _Run:
         action: str,
         details: dict[str, Any],
         capture_value: Capture | None = None,
+        capture_enabled: bool | None = None,
+        step: str | None = None,
     ) -> None:
-        if not self.capture_frames or not _CAPTURE_ENABLED.get():
+        if capture_enabled is None:
+            capture_enabled = _CAPTURE_ENABLED.get()
+        if not self.capture_frames or not capture_enabled:
+            return
+        with self._capture_lock:
+            try:
+                if capture_value is None:
+                    if self.active_hwnd is None:
+                        return
+                    from . import match as image_match
+
+                    capture_value = image_match.capture(self.active_hwnd)
+                success, encoded = cv2.imencode(
+                    ".png",
+                    np.ascontiguousarray(capture_value.pixels),
+                )
+                if not success:
+                    raise OSError("OpenCV could not encode the captured frame")
+                if step is None:
+                    step = self.step_title(_CURRENT_STEP_ID.get())
+                self.frames.append(
+                    _Frame(
+                        png=encoded.tobytes(),
+                        capture_rect=capture_value.rect,
+                        action_id=action_id,
+                        action=action,
+                        step=step,
+                        details=dict(details),
+                    )
+                )
+                if len(self.frames) > self.reports.max_frames:
+                    del self.frames[: len(self.frames) - self.reports.max_frames]
+            except Exception as error:
+                message = f"{type(error).__name__}: {error}"
+                if not self.capture_errors or self.capture_errors[-1] != message:
+                    self.capture_errors.append(message)
+
+
+@contextmanager
+def _capture_guard() -> Iterator[None]:
+    """Serialize automation and report captures while a report is active."""
+
+    run = _CURRENT_RUN.get()
+    if run is None:
+        yield
+        return
+    with run._capture_lock:
+        yield
+
+
+class _FrameSampler:
+    def __init__(self, run: _Run, recording_interval_seconds: float) -> None:
+        self._run = run
+        self._recording_interval_seconds = recording_interval_seconds
+        self._stop_event = threading.Event()
+        self._thread = threading.Thread(
+            target=self._sample,
+            name=f"litewinwrap-report-{run.test_id}",
+            daemon=True,
+        )
+        self._started = False
+
+    def start(self) -> None:
+        if not self._run.capture_frames:
             return
         try:
-            if capture_value is None:
-                if self.active_hwnd is None:
-                    return
-                from . import match as image_match
-
-                capture_value = image_match.capture(self.active_hwnd)
-            success, encoded = cv2.imencode(
-                ".png",
-                np.ascontiguousarray(capture_value.pixels),
-            )
-            if not success:
-                raise OSError("OpenCV could not encode the captured frame")
-            step_id = _CURRENT_STEP_ID.get()
-            self.frames.append(
-                _Frame(
-                    png=encoded.tobytes(),
-                    capture_rect=capture_value.rect,
-                    action_id=action_id,
-                    action=action,
-                    step=self.step_title(step_id),
-                    details=dict(details),
-                )
-            )
-            if len(self.frames) > self.reports.max_frames:
-                del self.frames[: len(self.frames) - self.reports.max_frames]
+            self._thread.start()
         except Exception as error:
-            self.capture_errors.append(f"{type(error).__name__}: {error}")
+            self._run.capture_errors.append(
+                f"Frame recorder: {type(error).__name__}: {error}"
+            )
+        else:
+            self._started = True
+
+    def stop(self) -> None:
+        if not self._started:
+            return
+        self._stop_event.set()
+        self._thread.join()
+        self._started = False
+
+    def _sample(self) -> None:
+        while not self._stop_event.wait(self._recording_interval_seconds):
+            (
+                hwnd,
+                action_id,
+                action,
+                step,
+                details,
+                capture_enabled,
+            ) = self._run.sampling_snapshot()
+            if hwnd is None or not capture_enabled:
+                continue
+            self._run.capture(
+                action_id=action_id,
+                action=action,
+                details=details,
+                capture_enabled=True,
+                step=step,
+            )
 
 
 class _ActionSpan:
@@ -330,6 +467,13 @@ def _action(
     depth_token = _ACTION_DEPTH.set(depth + 1)
     started_seconds = run.elapsed_seconds()
     started_clock = time.monotonic()
+    if depth == 0:
+        run.begin_action_sampling(
+            action_id=action_id,
+            action=action,
+            details=span.details,
+            hwnd=span.hwnd,
+        )
     status = "passed"
     error_type: str | None = None
     error_message: str | None = None
@@ -346,8 +490,6 @@ def _action(
     finally:
         duration_seconds = time.monotonic() - started_clock
         _ACTION_DEPTH.reset(depth_token)
-        if span.hwnd is not None:
-            run.active_hwnd = span.hwnd
         event = {
             "id": action_id,
             "action": action,
@@ -371,6 +513,11 @@ def _action(
                 details=span.details,
                 capture_value=span._capture,
             )
+        if depth == 0:
+            run.finish_action_sampling(
+                action_id=action_id,
+                hwnd=span.hwnd,
+            )
 
 
 class Reports:
@@ -383,7 +530,8 @@ class Reports:
         retain: Literal["failures"] = "failures",
         capture_frames: bool = True,
         max_frames: int = 40,
-        frame_duration_seconds: float = 0.2,
+        recording_interval_seconds: float = 0.2,
+        playback_frame_duration_seconds: float = 0.5,
     ) -> None:
         if retain != "failures":
             raise ValueError("The MVP supports retain='failures' only")
@@ -391,13 +539,26 @@ class Reports:
             raise TypeError("capture_frames must be a boolean")
         if max_frames <= 0:
             raise ValueError("max_frames must be positive")
-        if not isfinite(frame_duration_seconds) or frame_duration_seconds <= 0.0:
-            raise ValueError("frame_duration_seconds must be a finite positive number")
+        if (
+            not isfinite(recording_interval_seconds)
+            or recording_interval_seconds <= 0.0
+        ):
+            raise ValueError(
+                "recording_interval_seconds must be a finite positive number"
+            )
+        if (
+            not isfinite(playback_frame_duration_seconds)
+            or playback_frame_duration_seconds <= 0.0
+        ):
+            raise ValueError(
+                "playback_frame_duration_seconds must be a finite positive number"
+            )
         self.artifact_directory = Path(artifact_directory)
         self.retain = retain
         self.capture_frames = capture_frames
         self.max_frames = max_frames
-        self.frame_duration_seconds = float(frame_duration_seconds)
+        self.recording_interval_seconds = float(recording_interval_seconds)
+        self.playback_frame_duration_seconds = float(playback_frame_duration_seconds)
         self.last_report: Path | None = None
 
     def test(
@@ -446,9 +607,12 @@ class Reports:
                 step_token = _CURRENT_STEP_ID.set(None)
                 depth_token = _ACTION_DEPTH.set(0)
                 capture_token = _CAPTURE_ENABLED.set(True)
+                sampler = _FrameSampler(run, self.recording_interval_seconds)
+                sampler.start()
                 try:
                     return function(*args, **kwargs)
                 except Exception as error:
+                    sampler.stop()
                     if not run.actions or run.actions[-1]["status"] != "failed":
                         run.capture(
                             action_id=None,
@@ -475,6 +639,7 @@ class Reports:
                         print(f"litewinwrap report: {report}", file=sys.stderr)
                     raise
                 finally:
+                    sampler.stop()
                     _CAPTURE_ENABLED.reset(capture_token)
                     _ACTION_DEPTH.reset(depth_token)
                     _CURRENT_STEP_ID.reset(step_token)
@@ -515,6 +680,10 @@ class Reports:
         capture_token = None
         if capture_frames is not None:
             capture_token = _CAPTURE_ENABLED.set(capture_frames)
+        sampling_state = run.enter_step_sampling(
+            step_id,
+            _CAPTURE_ENABLED.get(),
+        )
         try:
             yield
         except Exception:
@@ -524,6 +693,7 @@ class Reports:
             step["status"] = "passed"
         finally:
             step["duration_seconds"] = time.monotonic() - started_seconds
+            run.restore_step_sampling(sampling_state)
             if capture_token is not None:
                 _CAPTURE_ENABLED.reset(capture_token)
             _CURRENT_STEP_ID.reset(step_token)
@@ -538,7 +708,7 @@ class Reports:
             run.frames,
             directory=directory,
             images_directory=images_directory,
-            frame_duration_seconds=self.frame_duration_seconds,
+            playback_frame_duration_seconds=self.playback_frame_duration_seconds,
         )
         try:
             media["target"] = _write_target(error, directory)
@@ -658,7 +828,7 @@ def _write_media(
     *,
     directory: Path,
     images_directory: Path,
-    frame_duration_seconds: float,
+    playback_frame_duration_seconds: float,
 ) -> dict[str, Any]:
     result: dict[str, Any] = {
         "gif": None,
@@ -730,7 +900,23 @@ def _write_media(
 
     final_image = directory / "failure.png"
     rendered[-1].save(final_image, format="PNG")
-    palette = rendered[0].quantize(
+    palette_samples: list[Image.Image] = []
+    for image in rendered:
+        sample = image.copy()
+        sample.thumbnail((240, 160), Image.Resampling.LANCZOS)
+        palette_samples.append(sample)
+    palette_sheet = Image.new(
+        "RGB",
+        (
+            max(image.width for image in palette_samples),
+            sum(image.height for image in palette_samples),
+        ),
+    )
+    sample_y = 0
+    for image in palette_samples:
+        palette_sheet.paste(image, (0, sample_y))
+        sample_y += image.height
+    palette = palette_sheet.quantize(
         colors=128,
         method=Image.Quantize.MEDIANCUT,
         dither=Image.Dither.NONE,
@@ -744,7 +930,7 @@ def _write_media(
         format="GIF",
         save_all=True,
         append_images=gif_frames[1:],
-        duration=max(1, round(frame_duration_seconds * 1000)),
+        duration=max(1, round(playback_frame_duration_seconds * 1000)),
         loop=0,
         disposal=1,
         optimize=True,
@@ -788,9 +974,11 @@ def _render_html(trace: dict[str, Any], media: dict[str, Any]) -> str:
             "<figure><figcaption>"
             f"{target_label}<strong>{escape(target_media['name'])}</strong>"
             "</figcaption><div class='target-stage'>"
+            f"<a class='media-link target-link' href='{escape(target_media['path'])}' "
+            "target='_blank' rel='noopener' title='Open full-size target'>"
             f"<img class='target' src='{escape(target_media['path'])}' "
             f"style='width:{display_width}px' alt='Target that was not found'>"
-            "</div></figure>"
+            "</a></div></figure>"
         )
     if media.get("final_image"):
         final_label = "Screen when matching failed" if target_media else "Final frame"
@@ -798,8 +986,10 @@ def _render_html(trace: dict[str, Any], media: dict[str, Any]) -> str:
             "<figure><figcaption>"
             f"{final_label}"
             "</figcaption>"
+            f"<a class='media-link' href='{escape(media['final_image'])}' "
+            "target='_blank' rel='noopener' title='Open full-size image'>"
             f"<img class='visual' src='{escape(media['final_image'])}' "
-            "alt='Screen captured when the test failed'></figure>"
+            "alt='Screen captured when the test failed'></a></figure>"
         )
     evidence_html = ""
     if evidence_items:
@@ -812,9 +1002,11 @@ def _render_html(trace: dict[str, Any], media: dict[str, Any]) -> str:
     sequence_html = ""
     if media.get("gif"):
         sequence_html = (
-            "<section><h2>What happened</h2>"
+            "<section class='sequence'><h2>What happened</h2>"
+            f"<a class='media-link' href='{escape(media['gif'])}' "
+            "target='_blank' rel='noopener' title='Open full-size animation'>"
             f"<img class='visual' src='{escape(media['gif'])}' "
-            "alt='Recorded action sequence'></section>"
+            "alt='Recorded action sequence'></a></section>"
         )
 
     action_items = "".join(
@@ -854,19 +1046,22 @@ def _render_html(trace: dict[str, Any], media: dict[str, Any]) -> str:
 <style>
 :root {{ color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }}
 body {{ margin: 0; background: #f4f5f7; color: #172033; }}
-main {{ max-width: 960px; margin: 0 auto; padding: 32px 20px 64px; }}
-header, section, details.technical {{ background: white; border: 1px solid #dbe2ea; border-radius: 10px; padding: 20px; margin-bottom: 14px; }}
+main {{ max-width: 900px; margin: 0 auto; padding: 24px 18px 48px; }}
+header, section, details.technical {{ background: white; border: 1px solid #dbe2ea; border-radius: 10px; padding: 16px; margin-bottom: 12px; }}
 h1 {{ margin: 8px 0 10px; font-size: 26px; }} h2 {{ margin: 0 0 14px; font-size: 17px; }} h3 {{ font-size: 14px; }}
 .badge {{ display: inline-block; color: #991b1b; background: #fee2e2; border-radius: 999px; padding: 5px 10px; font-weight: 700; font-size: 12px; letter-spacing: .05em; }}
 .message {{ margin: 0; font-size: 16px; line-height: 1.5; }}
 .context {{ display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 14px 0 0; color: #64748b; font-size: 13px; }}
-.evidence {{ display: grid; grid-template-columns: minmax(180px, 1fr) minmax(0, 2fr); gap: 18px; align-items: start; }}
+.evidence {{ display: grid; grid-template-columns: minmax(150px, .8fr) minmax(0, 1.2fr); gap: 16px; align-items: start; }}
 figure {{ margin: 0; min-width: 0; }} figcaption {{ margin-bottom: 10px; color: #475569; font-size: 13px; }} figcaption strong {{ display: block; margin-top: 3px; color: #172033; overflow-wrap: anywhere; }}
-.target-stage {{ display: grid; min-height: 160px; place-items: center; padding: 18px; background: #eef1f5; border: 1px solid #cbd5e1; border-radius: 7px; overflow: hidden; }}
-.target {{ display: block; max-width: 100%; height: auto; image-rendering: pixelated; }}
+.target-stage {{ display: grid; min-height: 110px; max-height: 180px; place-items: center; padding: 12px; background: #eef1f5; border: 1px solid #cbd5e1; border-radius: 7px; overflow: hidden; }}
+.target {{ display: block; max-width: 100%; max-height: 150px; height: auto; object-fit: contain; image-rendering: pixelated; }}
 .facts {{ display: grid; grid-template-columns: minmax(120px, 180px) 1fr; gap: 8px 18px; }}
 .facts dt {{ color: #64748b; font-weight: 600; }} .facts dd {{ margin: 0; overflow-wrap: anywhere; }}
-.visual {{ display: block; width: 100%; height: auto; border: 1px solid #cbd5e1; border-radius: 7px; }}
+.media-link {{ display: block; color: inherit; }} .target-link {{ display: grid; place-items: center; max-width: 100%; }}
+.visual {{ display: block; max-width: 100%; height: auto; border: 1px solid #cbd5e1; border-radius: 7px; object-fit: contain; }}
+.evidence .visual {{ width: auto; max-height: 280px; margin: 0 auto; }}
+.sequence .media-link {{ display: flex; justify-content: center; }} .sequence .visual {{ width: auto; max-height: min(48vh, 380px); }}
 .actions {{ margin: 18px 0; padding-left: 24px; }} .actions li {{ padding: 5px 0; }} .actions span, .actions strong, .actions small {{ display: block; }} .actions span, .actions small {{ color: #64748b; }}
 pre {{ white-space: pre-wrap; overflow-wrap: anywhere; background: #0f172a; color: #e2e8f0; border-radius: 7px; padding: 14px; overflow: auto; }}
 summary {{ cursor: pointer; color: #334155; font-weight: 600; }}

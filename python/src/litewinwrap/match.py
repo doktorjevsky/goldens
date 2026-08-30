@@ -52,15 +52,16 @@ def _hwnd(window: Window | HWND | int) -> HWND:
 
 
 def capture(window: Window | HWND | int) -> Capture:
-    hwnd = _hwnd(window)
-    if not win32.is_window(hwnd):
-        raise LookupError(f"Window no longer exists: {int(hwnd)}")
-    rect = win32.get_extended_frame_rect(hwnd)
-    raw = win32.capture_screen(rect)
-    bgra = np.frombuffer(raw, dtype=np.uint8).reshape(rect.height, rect.width, 4)
-    pixels = bgra[:, :, :3].copy()
-    pixels.setflags(write=False)
-    return Capture(pixels=pixels, rect=rect)
+    with reporting._capture_guard():
+        hwnd = _hwnd(window)
+        if not win32.is_window(hwnd):
+            raise LookupError(f"Window no longer exists: {int(hwnd)}")
+        rect = win32.get_extended_frame_rect(hwnd)
+        raw = win32.capture_screen(rect)
+        bgra = np.frombuffer(raw, dtype=np.uint8).reshape(rect.height, rect.width, 4)
+        pixels = bgra[:, :, :3].copy()
+        pixels.setflags(write=False)
+        return Capture(pixels=pixels, rect=rect)
 
 
 def _validate(capture_value: Capture, target: Target, threshold: float) -> None:

@@ -17,7 +17,7 @@ environment:
 ```powershell
 py -m venv C:\Tools\litewinwrap-env
 C:\Tools\litewinwrap-env\Scripts\python -m pip install `
-    C:\Transfer\litewinwrap-0.1.0a5-py3-none-any.whl
+    C:\Transfer\litewinwrap-0.1.0a6-py3-none-any.whl
 ```
 
 For editable development from this directory:
@@ -260,7 +260,8 @@ from litewinwrap import Reports
 reports = Reports(
     Path("artifacts"),
     max_frames=40,
-    frame_duration_seconds=0.2,
+    recording_interval_seconds=0.2,
+    playback_frame_duration_seconds=0.5,
 )
 
 
@@ -289,14 +290,17 @@ that could not be found. It then re-raises the original exception, preserving
 normal script and CI failure behavior. Passing tests write no artifact.
 
 The report page leads with the error, missing target, screen at failure, and a
-short action GIF. Traceback and action details are collapsed; the complete
+short action GIF. Images are constrained to the browser viewport and link to
+their full-size files. Traceback and action details are collapsed; the complete
 machine-readable trace remains in `trace.json`. High-level window operations
 and direct matching, mouse, and keyboard primitives are traced automatically.
-Nested low-level operations are retained in the trace but only the outer action
-captures a frame.
 
-GIF frames default to `frame_duration_seconds=0.2` (5 frames per second) and
-are downscaled and palette-compressed to keep artifact sizes reasonable.
+Recording and playback are independent. While a window is active, reports
+sample it every `recording_interval_seconds=0.2` (up to 5 captured frames per
+second). The GIF holds each captured frame for
+`playback_frame_duration_seconds=0.5` (2 playback frames per second), making UI
+transitions easier to inspect. GIFs are downscaled and palette-compressed to
+keep artifact sizes reasonable.
 
 Literal text passed to `type_text()` or `write()` is never recorded; reports
 store only its character count. Window screenshots can still contain sensitive

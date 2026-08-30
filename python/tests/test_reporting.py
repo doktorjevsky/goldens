@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -24,7 +25,7 @@ class ReportingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             reports = Reports(
                 temporary_directory,
-                frame_duration_seconds=0.1,
+                playback_frame_duration_seconds=0.1,
             )
 
             @reports.test(
@@ -68,6 +69,7 @@ class ReportingTests(unittest.TestCase):
             self.assertNotIn("<h2>Steps</h2>", html)
             self.assertNotIn("<h2>Environment</h2>", html)
             self.assertIn("Technical details", html)
+            self.assertIn("max-height: min(48vh, 380px)", html)
             self.assertTrue(
                 any(
                     "litewinwrap report:" in note for note in raised.exception.__notes__
@@ -108,7 +110,7 @@ class ReportingTests(unittest.TestCase):
             with Image.open(directory / "target.png") as target_image:
                 self.assertEqual(target_image.size, (8, 6))
             with Image.open(directory / "failure.gif") as animation:
-                self.assertEqual(animation.info["duration"], 200)
+                self.assertEqual(animation.info["duration"], 500)
 
             html = reports.last_report.read_text(encoding="utf-8")
             self.assertIn("Missing target", html)
@@ -124,6 +126,84 @@ class ReportingTests(unittest.TestCase):
                     "height": 6,
                 },
             )
+
+    def test_recording_cadence_is_independent_from_playback_speed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            reports = Reports(
+                temporary_directory,
+                max_frames=20,
+                recording_interval_seconds=0.01,
+                playback_frame_duration_seconds=0.4,
+            )
+            capture_count = 0
+
+            def changing_capture(_hwnd: HWND) -> Capture:
+                nonlocal capture_count
+                capture_count += 1
+                capture_value = self._capture()
+                pixels = capture_value.pixels.copy()
+                pixels[0, 0] = (capture_count, 80, 140)
+                return Capture(pixels, capture_value.rect)
+
+            @reports.test(title="Wait for rendering")
+            def failing_test() -> None:
+                with reports.step("Open the dialog"):
+                    with _action("Wait for UI", hwnd=HWND(7)):
+                        time.sleep(0.07)
+                    raise RuntimeError("dialog did not open")
+
+            with (
+                patch("litewinwrap.match.capture", side_effect=changing_capture),
+                self.assertRaises(RuntimeError),
+            ):
+                failing_test()
+
+            assert reports.last_report is not None
+            trace = json.loads(
+                (reports.last_report.parent / "trace.json").read_text(encoding="utf-8")
+            )
+            recorded_action_frames = [
+                frame for frame in trace["frames"] if frame["action"] == "Wait for UI"
+            ]
+            self.assertGreaterEqual(len(recorded_action_frames), 3)
+            with Image.open(reports.last_report.parent / "failure.gif") as animation:
+                total_duration_milliseconds = 0
+                for frame_index in range(animation.n_frames):
+                    animation.seek(frame_index)
+                    total_duration_milliseconds += animation.info["duration"]
+                self.assertEqual(
+                    total_duration_milliseconds,
+                    len(trace["frames"]) * 400,
+                )
+
+    def test_report_capture_lock_is_reentrant_for_normal_window_capture(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            reports = Reports(temporary_directory)
+            rect = Rect(100, 200, 130, 220)
+            raw = np.zeros((rect.height, rect.width, 4), dtype=np.uint8).tobytes()
+
+            @reports.test(title="Capture the active window")
+            def failing_test() -> None:
+                with _action("Read UI", hwnd=HWND(7)):
+                    pass
+                raise RuntimeError("expected failure")
+
+            with (
+                patch("litewinwrap.match.win32.is_window", return_value=True),
+                patch(
+                    "litewinwrap.match.win32.get_extended_frame_rect",
+                    return_value=rect,
+                ),
+                patch("litewinwrap.match.win32.capture_screen", return_value=raw),
+                self.assertRaises(RuntimeError),
+            ):
+                failing_test()
+
+            assert reports.last_report is not None
+            trace = json.loads(
+                (reports.last_report.parent / "trace.json").read_text(encoding="utf-8")
+            )
+            self.assertGreaterEqual(len(trace["frames"]), 2)
 
     def test_success_does_not_write_an_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -224,8 +304,10 @@ class ReportingTests(unittest.TestCase):
     def test_validates_time_and_size_configuration(self) -> None:
         for values in (
             {"max_frames": 0},
-            {"frame_duration_seconds": 0.0},
-            {"frame_duration_seconds": float("nan")},
+            {"recording_interval_seconds": 0.0},
+            {"recording_interval_seconds": float("nan")},
+            {"playback_frame_duration_seconds": 0.0},
+            {"playback_frame_duration_seconds": float("nan")},
         ):
             with self.subTest(values=values):
                 with self.assertRaises(ValueError):
