@@ -5,7 +5,7 @@ import sys
 from ctypes import wintypes
 from typing import Iterable
 
-from .types import HWND, Rect
+from .types import HWND, Point, Rect
 
 
 SW_HIDE = 0
@@ -186,6 +186,8 @@ if _IS_WINDOWS:
 
     _user32.GetSystemMetrics.argtypes = (ctypes.c_int,)
     _user32.GetSystemMetrics.restype = ctypes.c_int
+    _user32.GetCursorPos.argtypes = (ctypes.POINTER(wintypes.POINT),)
+    _user32.GetCursorPos.restype = wintypes.BOOL
     _user32.GetDoubleClickTime.argtypes = ()
     _user32.GetDoubleClickTime.restype = wintypes.UINT
     _user32.SendInput.argtypes = (
@@ -448,6 +450,16 @@ def get_system_metric(index: int) -> int:
     _require_windows()
     assert _user32 is not None
     return int(_user32.GetSystemMetrics(index))
+
+
+def get_cursor_position() -> Point:
+    _require_windows()
+    assert _user32 is not None
+    value = wintypes.POINT()
+    ctypes.set_last_error(0)
+    if not _user32.GetCursorPos(ctypes.byref(value)):
+        raise _last_error("GetCursorPos")
+    return Point(int(value.x), int(value.y))
 
 
 def get_double_click_seconds() -> float:

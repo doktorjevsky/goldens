@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -22,12 +23,16 @@ MOUSEEVENTF_XDOWN = 0x0080
 MOUSEEVENTF_XUP = 0x0100
 MOUSEEVENTF_WHEEL = 0x0800
 MOUSEEVENTF_HWHEEL = 0x1000
+MOUSEEVENTF_MOVE_NOCOALESCE = 0x2000
 MOUSEEVENTF_VIRTUALDESK = 0x4000
 MOUSEEVENTF_ABSOLUTE = 0x8000
 
 WHEEL_DELTA = 120
 XBUTTON1 = 0x0001
 XBUTTON2 = 0x0002
+
+_MOVE_INTERVAL_SECONDS = 1.0 / 60.0
+_DEFAULT_DRAG_DURATION_SECONDS = 0.25
 
 _DOWN = {
     "left": (MOUSEEVENTF_LEFTDOWN, 0),
@@ -59,12 +64,18 @@ def _input(flags: int, *, dx: int = 0, dy: int = 0, data: int = 0) -> win32.INPU
     return value
 
 
-def move_to(point: Point | tuple[int, int]) -> int:
+def _validate_duration_seconds(duration_seconds: float) -> None:
+    if not math.isfinite(duration_seconds) or duration_seconds < 0:
+        raise ValueError("Movement duration must be a finite non-negative number")
+
+
+def _absolute_move_input(
+    point: Point | tuple[int, int],
+    *,
+    virtual_screen: tuple[int, int, int, int],
+) -> win32.INPUT:
     x, y = point
-    left = win32.get_system_metric(win32.SM_XVIRTUALSCREEN)
-    top = win32.get_system_metric(win32.SM_YVIRTUALSCREEN)
-    width = win32.get_system_metric(win32.SM_CXVIRTUALSCREEN)
-    height = win32.get_system_metric(win32.SM_CYVIRTUALSCREEN)
+    left, top, width, height = virtual_screen
     if width <= 1 or height <= 1:
         raise OSError("Windows reported an invalid virtual-screen size")
     if not (left <= x < left + width and top <= y < top + height):
@@ -72,21 +83,69 @@ def move_to(point: Point | tuple[int, int]) -> int:
 
     normalized_x = round((x - left) * 65535 / (width - 1))
     normalized_y = round((y - top) * 65535 / (height - 1))
-    return win32.send_input(
-        [
-            _input(
-                MOUSEEVENTF_MOVE
-                | MOUSEEVENTF_ABSOLUTE
-                | MOUSEEVENTF_VIRTUALDESK,
-                dx=normalized_x,
-                dy=normalized_y,
-            )
-        ]
+    return _input(
+        MOUSEEVENTF_MOVE
+        | MOUSEEVENTF_MOVE_NOCOALESCE
+        | MOUSEEVENTF_ABSOLUTE
+        | MOUSEEVENTF_VIRTUALDESK,
+        dx=normalized_x,
+        dy=normalized_y,
     )
 
 
-def move_by(dx: int, dy: int) -> int:
-    return win32.send_input([_input(MOUSEEVENTF_MOVE, dx=dx, dy=dy)])
+def move_to(
+    point: Point | tuple[int, int],
+    *,
+    duration_seconds: float = 0.0,
+) -> int:
+    """Move to an absolute screen point, optionally over a human-like duration."""
+
+    _validate_duration_seconds(duration_seconds)
+    destination = Point(*point)
+    virtual_screen = (
+        win32.get_system_metric(win32.SM_XVIRTUALSCREEN),
+        win32.get_system_metric(win32.SM_YVIRTUALSCREEN),
+        win32.get_system_metric(win32.SM_CXVIRTUALSCREEN),
+        win32.get_system_metric(win32.SM_CYVIRTUALSCREEN),
+    )
+    destination_input = _absolute_move_input(
+        destination,
+        virtual_screen=virtual_screen,
+    )
+    if duration_seconds == 0:
+        return win32.send_input([destination_input])
+
+    origin = win32.get_cursor_position()
+    steps = max(1, math.ceil(duration_seconds / _MOVE_INTERVAL_SECONDS))
+    step_seconds = duration_seconds / steps
+    sent = 0
+    for step in range(1, steps + 1):
+        time.sleep(step_seconds)
+        progress = step / steps
+        intermediate = Point(
+            round(origin.x + (destination.x - origin.x) * progress),
+            round(origin.y + (destination.y - origin.y) * progress),
+        )
+        sent += win32.send_input(
+            [
+                _absolute_move_input(
+                    intermediate,
+                    virtual_screen=virtual_screen,
+                )
+            ]
+        )
+    return sent
+
+
+def move_by(dx: int, dy: int, *, duration_seconds: float = 0.0) -> int:
+    """Move by an exact number of screen pixels."""
+
+    _validate_duration_seconds(duration_seconds)
+    origin = win32.get_cursor_position()
+    return move_to(
+        Point(origin.x + dx, origin.y + dy),
+        duration_seconds=duration_seconds,
+    )
 
 
 def button_down(button: Button = "left") -> int:
@@ -155,20 +214,29 @@ def drag_to(
     *,
     origin: Point | tuple[int, int] | None = None,
     button: Button = "left",
+    duration_seconds: float = _DEFAULT_DRAG_DURATION_SECONDS,
 ) -> int:
+    _validate_duration_seconds(duration_seconds)
     sent = move_to(origin) if origin is not None else 0
     sent += button_down(button)
     try:
-        sent += move_to(destination)
+        sent += move_to(destination, duration_seconds=duration_seconds)
     finally:
         sent += button_up(button)
     return sent
 
 
-def drag_by(dx: int, dy: int, *, button: Button = "left") -> int:
+def drag_by(
+    dx: int,
+    dy: int,
+    *,
+    button: Button = "left",
+    duration_seconds: float = _DEFAULT_DRAG_DURATION_SECONDS,
+) -> int:
+    _validate_duration_seconds(duration_seconds)
     sent = button_down(button)
     try:
-        sent += move_by(dx, dy)
+        sent += move_by(dx, dy, duration_seconds=duration_seconds)
     finally:
         sent += button_up(button)
     return sent

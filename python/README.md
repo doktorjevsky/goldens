@@ -17,7 +17,7 @@ environment:
 ```powershell
 py -m venv C:\Tools\litewinwrap-env
 C:\Tools\litewinwrap-env\Scripts\python -m pip install `
-    C:\Transfer\litewinwrap-0.1.0a2-py3-none-any.whl
+    C:\Transfer\litewinwrap-0.1.0a3-py3-none-any.whl
 ```
 
 For editable development from this directory:
@@ -209,8 +209,8 @@ from litewinwrap import keyboard, match, mouse, win32
 keyboard.type_text("literal Unicode")
 keyboard.press("ctrl", "q")
 mouse.click((100, 200))
-mouse.move_to((300, 200))
-mouse.move_by(100, 0)
+mouse.move_to((300, 200), duration_seconds=0.2)
+mouse.move_by(100, 0, duration_seconds=0.2)
 mouse.drag_to((500, 200))
 mouse.drag_by(100, 0)
 match.match(capture, target)
@@ -229,12 +229,19 @@ with keyboard.hold("ctrl"):
 
 with keyboard.hold("ctrl", "shift"):
     with mouse.hold("left"):
-        mouse.move_by(100, 0)
+        mouse.move_by(100, 0, duration_seconds=0.25)
 ```
 
 Both `hold()` context managers release their keys or button even if the block
 raises. For unusual interactions, `keyboard.down()` / `keyboard.up()` and
 `mouse.button_down()` / `mouse.button_up()` remain fully explicit.
+
+`move_to()` and `move_by()` are instantaneous unless `duration_seconds` is
+provided. Timed movement emits intermediate absolute positions at 60 Hz, so
+relative distances remain exact and are not changed by the Windows pointer
+acceleration setting. Drags default to `duration_seconds=0.25` so applications
+receive a useful stream of movement events while the button is held. Pass
+`duration_seconds=0.0` for an explicitly instantaneous drag.
 
 `subprocess.Popen` remains the normal way to launch applications. Pass an
 argument list and avoid `shell=True` for values assembled from external input.
