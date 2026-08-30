@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
 from typing import TypeAlias
 
 from . import win32
@@ -177,7 +178,7 @@ def _key_input(vk: int, flags: int = 0) -> win32.INPUT:
         wVk=vk,
         wScan=0,
         dwFlags=flags,
-        time=0,
+        time_milliseconds=0,
         dwExtraInfo=0,
     )
     return value
@@ -190,7 +191,7 @@ def _unicode_input(unit: int, flags: int = 0) -> win32.INPUT:
         wVk=0,
         wScan=unit,
         dwFlags=KEYEVENTF_UNICODE | flags,
-        time=0,
+        time_milliseconds=0,
         dwExtraInfo=0,
     )
     return value
@@ -216,7 +217,23 @@ def key_up(key: Key) -> int:
     return up(key)
 
 
-def press(*keys: Key, count: int = 1, interval: float = 0.0) -> int:
+@contextmanager
+def hold(*keys: Key) -> Iterator[None]:
+    """Hold a key or chord for the duration of a ``with`` block."""
+
+    if not keys:
+        raise ValueError("At least one key is required")
+    codes = tuple(_key_code(key) for key in keys)
+    win32.send_input([_key_input(code) for code in codes])
+    try:
+        yield
+    finally:
+        win32.send_input(
+            [_key_input(code, KEYEVENTF_KEYUP) for code in reversed(codes)]
+        )
+
+
+def press(*keys: Key, count: int = 1, interval_seconds: float = 0.0) -> int:
     """Press one key or a chord such as ``press("ctrl", "q")``."""
 
     if not keys:
@@ -231,8 +248,8 @@ def press(*keys: Key, count: int = 1, interval: float = 0.0) -> int:
             _key_input(code, KEYEVENTF_KEYUP) for code in reversed(codes)
         )
         sent += win32.send_input(inputs)
-        if index + 1 < count and interval > 0:
-            time.sleep(interval)
+        if index + 1 < count and interval_seconds > 0:
+            time.sleep(interval_seconds)
     return sent
 
 
@@ -242,7 +259,12 @@ def hotkey(*keys: Key) -> int:
     return press(*keys)
 
 
-def write(text: str, *, interval: float = 0.0, chunk_size: int = 256) -> int:
+def write(
+    text: str,
+    *,
+    interval_seconds: float = 0.0,
+    chunk_size: int = 256,
+) -> int:
     if chunk_size <= 0:
         raise ValueError("Chunk size must be positive")
 
@@ -257,11 +279,11 @@ def write(text: str, *, interval: float = 0.0, chunk_size: int = 256) -> int:
     ]
 
     sent = 0
-    if interval > 0:
+    if interval_seconds > 0:
         for index, pair in enumerate(pairs):
             sent += win32.send_input(pair)
             if index + 1 < len(pairs):
-                time.sleep(interval)
+                time.sleep(interval_seconds)
         return sent
 
     inputs = [event for pair in pairs for event in pair]
@@ -270,10 +292,19 @@ def write(text: str, *, interval: float = 0.0, chunk_size: int = 256) -> int:
     return sent
 
 
-def type_text(text: str, *, interval: float = 0.0, chunk_size: int = 256) -> int:
+def type_text(
+    text: str,
+    *,
+    interval_seconds: float = 0.0,
+    chunk_size: int = 256,
+) -> int:
     """Type literal Unicode text into the foreground application."""
 
-    return write(text, interval=interval, chunk_size=chunk_size)
+    return write(
+        text,
+        interval_seconds=interval_seconds,
+        chunk_size=chunk_size,
+    )
 
 
 def release(keys: Iterable[Key]) -> int:

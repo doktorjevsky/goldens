@@ -1,18 +1,21 @@
 from __future__ import annotations
 
-import re
 import time
-from dataclasses import dataclass
-from math import isfinite
-from typing import ClassVar, Pattern
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
-from . import win32
+from . import keyboard, mouse, win32
+from .automation import TextSelector, _describe_selectors, _matches
 from .mouse import Button
 from .types import Capture, HWND, Match, Rect, Target
 
 
-_POLL_INTERVAL = 0.05
-TextSelector = str | Pattern[str]
+if TYPE_CHECKING:
+    from .automation import Automation
+    from .keyboard import Key
+
+
+_POLL_INTERVAL_SECONDS = 0.05
 
 
 class WindowNotFoundError(LookupError):
@@ -20,7 +23,7 @@ class WindowNotFoundError(LookupError):
 
 
 class WindowAmbiguousError(LookupError):
-    def __init__(self, windows: tuple[Window, ...]):
+    def __init__(self, windows: tuple[Window, ...]) -> None:
         self.windows = windows
         super().__init__(f"Expected one window, found {len(windows)}")
 
@@ -33,59 +36,15 @@ class WindowCloseTimeoutError(TimeoutError):
     pass
 
 
-def _matches(value: str, selector: TextSelector | None) -> bool:
-    if selector is None:
-        return True
-    if isinstance(selector, re.Pattern):
-        return selector.search(value) is not None
-    return value == selector
-
-
-def _describe_selectors(
-    title: TextSelector | None,
-    class_name: TextSelector | None,
-    process_id: int | None = None,
-) -> str:
-    values = []
-    if title is not None:
-        values.append(f"title={title!r}")
-    if class_name is not None:
-        values.append(f"class_name={class_name!r}")
-    if process_id is not None:
-        values.append(f"process_id={process_id}")
-    return ", ".join(values) or "the supplied selectors"
-
-
 @dataclass(frozen=True, slots=True)
 class Window:
-    """A live reference to a Win32 window. Only the HWND is retained."""
-
-    default_timeout: ClassVar[float] = 2.0
-    default_post_click_delay: ClassVar[float] = 0.15
+    """A live HWND bound to one :class:`Automation` policy."""
 
     hwnd: HWND
+    automation: Automation = field(repr=False, compare=False)
 
-    @classmethod
-    def set_default_timeout(cls, timeout: float) -> None:
-        """Set the timeout used by window and target searches when omitted."""
-
-        value = float(timeout)
-        if not isfinite(value) or value < 0.0:
-            raise ValueError("Default timeout must be a finite non-negative number")
-        cls.default_timeout = value
-
-    @classmethod
-    def set_default_post_click_delay(cls, delay: float) -> None:
-        """Set the settling delay after successful target clicks."""
-
-        value = float(delay)
-        if not isfinite(value) or value < 0.0:
-            raise ValueError("Post-click delay must be a finite non-negative number")
-        cls.default_post_click_delay = value
-
-    @classmethod
-    def _resolve_timeout(cls, timeout: float | None) -> float:
-        return cls.default_timeout if timeout is None else timeout
+    def _window(self, hwnd: HWND | int) -> Window:
+        return type(self)(HWND(int(hwnd)), self.automation)
 
     @property
     def exists(self) -> bool:
@@ -110,7 +69,7 @@ class Window:
     @property
     def parent(self) -> Window | None:
         parent = win32.get_parent(self.hwnd)
-        return Window(parent) if parent is not None else None
+        return self._window(parent) if parent is not None else None
 
     @property
     def visible(self) -> bool:
@@ -128,63 +87,7 @@ class Window:
     def foreground(self) -> bool:
         return win32.get_foreground_window() == self.hwnd
 
-    @classmethod
-    def list(cls, *, visible_only: bool = True) -> tuple[Window, ...]:
-        windows = tuple(cls(hwnd) for hwnd in win32.enum_windows())
-        if visible_only:
-            windows = tuple(window for window in windows if window.visible)
-        return windows
-
-    @classmethod
-    def find_all(
-        cls,
-        title: TextSelector | None = None,
-        *,
-        class_name: TextSelector | None = None,
-        process_id: int | None = None,
-        visible_only: bool = True,
-    ) -> tuple[Window, ...]:
-        return tuple(
-            window
-            for window in cls.list(visible_only=visible_only)
-            if (title is None or _matches(window.title, title))
-            and (class_name is None or _matches(window.class_name, class_name))
-            and (process_id is None or window.process_id == process_id)
-        )
-
-    @classmethod
-    def find(
-        cls,
-        title: TextSelector | None = None,
-        *,
-        class_name: TextSelector | None = None,
-        process_id: int | None = None,
-        visible_only: bool = True,
-        timeout: float | None = None,
-    ) -> Window:
-        timeout = cls._resolve_timeout(timeout)
-        deadline = time.monotonic() + max(0.0, timeout)
-        while True:
-            matches = cls.find_all(
-                title,
-                class_name=class_name,
-                process_id=process_id,
-                visible_only=visible_only,
-            )
-            if len(matches) == 1:
-                return matches[0]
-            if len(matches) > 1:
-                raise WindowAmbiguousError(matches)
-
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                selectors = _describe_selectors(title, class_name, process_id)
-                raise WindowNotFoundError(
-                    f"No window matched {selectors} within {timeout:.3f}s"
-                )
-            time.sleep(min(_POLL_INTERVAL, remaining))
-
-    def get_children(
+    def children(
         self,
         *,
         recursive: bool = True,
@@ -195,7 +98,7 @@ class Window:
             handles = tuple(
                 hwnd for hwnd in handles if win32.get_parent(hwnd) == self.hwnd
             )
-        windows = tuple(Window(hwnd) for hwnd in handles)
+        windows = tuple(self._window(hwnd) for hwnd in handles)
         if visible_only:
             windows = tuple(window for window in windows if window.visible)
         return windows
@@ -207,14 +110,14 @@ class Window:
         class_name: TextSelector | None = None,
         recursive: bool = True,
         visible_only: bool = True,
-        timeout: float | None = None,
+        timeout_seconds: float | None = None,
     ) -> tuple[Window, ...]:
-        timeout = type(self)._resolve_timeout(timeout)
-        deadline = time.monotonic() + max(0.0, timeout)
+        timeout_seconds = self.automation._resolve_timeout_seconds(timeout_seconds)
+        deadline_seconds = time.monotonic() + timeout_seconds
         while True:
             matches = tuple(
                 window
-                for window in self.get_children(
+                for window in self.children(
                     recursive=recursive,
                     visible_only=visible_only,
                 )
@@ -224,10 +127,10 @@ class Window:
             if matches:
                 return matches
 
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
+            remaining_seconds = deadline_seconds - time.monotonic()
+            if remaining_seconds <= 0:
                 return ()
-            time.sleep(min(_POLL_INTERVAL, remaining))
+            time.sleep(min(_POLL_INTERVAL_SECONDS, remaining_seconds))
 
     def find_child(
         self,
@@ -236,15 +139,15 @@ class Window:
         class_name: TextSelector | None = None,
         recursive: bool = True,
         visible_only: bool = True,
-        timeout: float | None = None,
+        timeout_seconds: float | None = None,
     ) -> Window:
-        timeout = type(self)._resolve_timeout(timeout)
+        timeout_seconds = self.automation._resolve_timeout_seconds(timeout_seconds)
         matches = self.find_children(
             title,
             class_name=class_name,
             recursive=recursive,
             visible_only=visible_only,
-            timeout=timeout,
+            timeout_seconds=timeout_seconds,
         )
         if len(matches) == 1:
             return matches[0]
@@ -252,175 +155,263 @@ class Window:
             raise WindowAmbiguousError(matches)
         selectors = _describe_selectors(title, class_name)
         raise WindowNotFoundError(
-            f"No child of {int(self.hwnd)} matched {selectors} within {timeout:.3f}s"
+            f"No child of {int(self.hwnd)} matched {selectors} within "
+            f"{timeout_seconds:.3f}s"
         )
 
-    def screenshot(self) -> Capture:
+    def capture(self) -> Capture:
         from . import match as image_match
 
         return image_match.capture(self.hwnd)
 
-    def find_targets(
+    def locate_all(
         self,
         target: Target,
         *,
-        threshold: float = 0.90,
-        timeout: float | None = None,
-        overlap: float = 0.30,
+        threshold: float | None = None,
+        timeout_seconds: float | None = None,
+        overlap: float | None = None,
     ) -> tuple[Match, ...]:
         from . import match as image_match
 
         return image_match.find_all(
             self.hwnd,
             target,
-            threshold=threshold,
-            timeout=type(self)._resolve_timeout(timeout),
-            overlap=overlap,
+            threshold=self.automation._resolve_threshold(threshold),
+            timeout_seconds=self.automation._resolve_timeout_seconds(timeout_seconds),
+            overlap=self.automation._resolve_overlap(overlap),
         )
 
-    def find_target(
+    def locate(
         self,
         target: Target,
         *,
-        threshold: float = 0.90,
-        timeout: float | None = None,
-        overlap: float = 0.30,
-        retry_on_ambiguity: bool = False,
+        threshold: float | None = None,
+        timeout_seconds: float | None = None,
+        overlap: float | None = None,
+        retry_on_ambiguity: bool | None = None,
     ) -> Match:
         from . import match as image_match
 
+        retry = (
+            self.automation.retry_on_ambiguity
+            if retry_on_ambiguity is None
+            else retry_on_ambiguity
+        )
         return image_match.find(
             self.hwnd,
             target,
-            threshold=threshold,
-            timeout=type(self)._resolve_timeout(timeout),
-            overlap=overlap,
-            retry_on_ambiguity=retry_on_ambiguity,
+            threshold=self.automation._resolve_threshold(threshold),
+            timeout_seconds=self.automation._resolve_timeout_seconds(timeout_seconds),
+            overlap=self.automation._resolve_overlap(overlap),
+            retry_on_ambiguity=retry,
         )
 
-    def find_best_target(
+    def locate_best(
         self,
         target: Target,
         *,
-        threshold: float = 0.90,
-        timeout: float | None = None,
-        overlap: float = 0.30,
+        threshold: float | None = None,
+        timeout_seconds: float | None = None,
+        overlap: float | None = None,
     ) -> Match:
         from . import match as image_match
 
         return image_match.find_best(
             self.hwnd,
             target,
-            threshold=threshold,
-            timeout=type(self)._resolve_timeout(timeout),
-            overlap=overlap,
+            threshold=self.automation._resolve_threshold(threshold),
+            timeout_seconds=self.automation._resolve_timeout_seconds(timeout_seconds),
+            overlap=self.automation._resolve_overlap(overlap),
         )
 
-    def click_target(
+    def hover(
         self,
         target: Target,
         *,
-        threshold: float = 0.90,
-        timeout: float | None = None,
-        overlap: float = 0.30,
-        retry_on_ambiguity: bool = False,
+        threshold: float | None = None,
+        timeout_seconds: float | None = None,
+        overlap: float | None = None,
+        retry_on_ambiguity: bool | None = None,
+        focus: bool | None = None,
+        settle_seconds: float | None = None,
+    ) -> Match:
+        """Locate a target, move to its click point, and let the UI settle."""
+
+        if self.automation._resolve_focus(focus) and not self.foreground:
+            self.focus(settle_seconds=0.0)
+        found = self.locate(
+            target,
+            threshold=threshold,
+            timeout_seconds=timeout_seconds,
+            overlap=overlap,
+            retry_on_ambiguity=retry_on_ambiguity,
+        )
+        mouse.move_to(found.click)
+        self.automation._settle(settle_seconds)
+        return found
+
+    def click(
+        self,
+        target: Target,
+        *,
+        threshold: float | None = None,
+        timeout_seconds: float | None = None,
+        overlap: float | None = None,
+        retry_on_ambiguity: bool | None = None,
         button: Button = "left",
-        wait_after: float | None = None,
+        focus: bool | None = None,
+        settle_seconds: float | None = None,
     ) -> Match:
         from . import match as image_match
 
+        if self.automation._resolve_focus(focus) and not self.foreground:
+            self.focus(settle_seconds=0.0)
+        retry = (
+            self.automation.retry_on_ambiguity
+            if retry_on_ambiguity is None
+            else retry_on_ambiguity
+        )
         return image_match.click(
             self.hwnd,
             target,
-            threshold=threshold,
-            timeout=type(self)._resolve_timeout(timeout),
-            overlap=overlap,
-            retry_on_ambiguity=retry_on_ambiguity,
+            threshold=self.automation._resolve_threshold(threshold),
+            timeout_seconds=self.automation._resolve_timeout_seconds(timeout_seconds),
+            overlap=self.automation._resolve_overlap(overlap),
+            retry_on_ambiguity=retry,
             button=button,
-            wait_after=(
-                type(self).default_post_click_delay
-                if wait_after is None
-                else wait_after
-            ),
+            wait_after_seconds=self.automation._resolve_settle_seconds(settle_seconds),
         )
 
-    def click_best_target(
+    def click_best(
         self,
         target: Target,
         *,
-        threshold: float = 0.90,
-        timeout: float | None = None,
-        overlap: float = 0.30,
+        threshold: float | None = None,
+        timeout_seconds: float | None = None,
+        overlap: float | None = None,
         button: Button = "left",
-        wait_after: float | None = None,
+        focus: bool | None = None,
+        settle_seconds: float | None = None,
     ) -> Match:
         from . import match as image_match
 
+        if self.automation._resolve_focus(focus) and not self.foreground:
+            self.focus(settle_seconds=0.0)
         return image_match.click_best(
             self.hwnd,
             target,
-            threshold=threshold,
-            timeout=type(self)._resolve_timeout(timeout),
-            overlap=overlap,
+            threshold=self.automation._resolve_threshold(threshold),
+            timeout_seconds=self.automation._resolve_timeout_seconds(timeout_seconds),
+            overlap=self.automation._resolve_overlap(overlap),
             button=button,
-            wait_after=(
-                type(self).default_post_click_delay
-                if wait_after is None
-                else wait_after
-            ),
+            wait_after_seconds=self.automation._resolve_settle_seconds(settle_seconds),
         )
 
-    def focus(self, *, restore: bool = True, timeout: float = 1.0) -> Window:
+    def type_text(
+        self,
+        text: str,
+        *,
+        interval_seconds: float = 0.0,
+        chunk_size: int = 256,
+        focus: bool | None = None,
+        settle_seconds: float | None = None,
+    ) -> Window:
+        if self.automation._resolve_focus(focus) and not self.foreground:
+            self.focus(settle_seconds=0.0)
+        keyboard.type_text(
+            text,
+            interval_seconds=interval_seconds,
+            chunk_size=chunk_size,
+        )
+        self.automation._settle(settle_seconds)
+        return self
+
+    def press(
+        self,
+        *keys: Key,
+        count: int = 1,
+        interval_seconds: float = 0.0,
+        focus: bool | None = None,
+        settle_seconds: float | None = None,
+    ) -> Window:
+        if self.automation._resolve_focus(focus) and not self.foreground:
+            self.focus(settle_seconds=0.0)
+        keyboard.press(*keys, count=count, interval_seconds=interval_seconds)
+        self.automation._settle(settle_seconds)
+        return self
+
+    def focus(
+        self,
+        *,
+        restore: bool = True,
+        timeout_seconds: float | None = None,
+        settle_seconds: float | None = None,
+    ) -> Window:
         if not self.exists:
             raise LookupError(f"Window no longer exists: {int(self.hwnd)}")
         if restore and self.minimized:
             win32.restore_window(self.hwnd)
 
         win32.set_foreground_window(self.hwnd)
-        deadline = time.monotonic() + max(0.0, timeout)
+        timeout_seconds = self.automation._resolve_timeout_seconds(timeout_seconds)
+        deadline_seconds = time.monotonic() + timeout_seconds
         while not self.foreground:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
+            remaining_seconds = deadline_seconds - time.monotonic()
+            if remaining_seconds <= 0:
                 actual = win32.get_foreground_window()
                 raise FocusTimeoutError(
                     f"Could not focus {int(self.hwnd)}; foreground is {actual}"
                 )
-            time.sleep(min(_POLL_INTERVAL, remaining))
+            time.sleep(min(_POLL_INTERVAL_SECONDS, remaining_seconds))
+        self.automation._settle(settle_seconds)
         return self
 
-    def move(self, x: int, y: int) -> Rect:
+    def move(self, x: int, y: int, *, settle_seconds: float | None = None) -> Rect:
         win32.move_window(self.hwnd, x, y)
+        self.automation._settle(settle_seconds)
         return self.rect
 
-    def resize(self, width: int, height: int) -> Rect:
+    def resize(
+        self,
+        width: int,
+        height: int,
+        *,
+        settle_seconds: float | None = None,
+    ) -> Rect:
         win32.resize_window(self.hwnd, width, height)
+        self.automation._settle(settle_seconds)
         return self.rect
 
-    def restore(self) -> Rect:
+    def restore(self, *, settle_seconds: float | None = None) -> Rect:
         win32.restore_window(self.hwnd)
+        self.automation._settle(settle_seconds)
         return self.rect
 
-    def minimize(self) -> Window:
+    def minimize(self, *, settle_seconds: float | None = None) -> Window:
         win32.minimize_window(self.hwnd)
+        self.automation._settle(settle_seconds)
         return self
 
-    def maximize(self) -> Rect:
+    def maximize(self, *, settle_seconds: float | None = None) -> Rect:
         win32.maximize_window(self.hwnd)
+        self.automation._settle(settle_seconds)
         return self.rect
 
-    def close(self, *, timeout: float = 0.0) -> None:
+    def close(self, *, timeout_seconds: float | None = None) -> None:
         win32.close_window(self.hwnd)
-        if timeout <= 0:
+        timeout_seconds = self.automation._resolve_timeout_seconds(timeout_seconds)
+        if timeout_seconds == 0.0:
             return
-
-        deadline = time.monotonic() + timeout
+        deadline_seconds = time.monotonic() + timeout_seconds
         while self.exists:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
+            remaining_seconds = deadline_seconds - time.monotonic()
+            if remaining_seconds <= 0:
                 raise WindowCloseTimeoutError(
-                    f"Window {int(self.hwnd)} did not close within {timeout:.3f}s"
+                    f"Window {int(self.hwnd)} did not close within "
+                    f"{timeout_seconds:.3f}s"
                 )
-            time.sleep(min(_POLL_INTERVAL, remaining))
+            time.sleep(min(_POLL_INTERVAL_SECONDS, remaining_seconds))
 
     def __int__(self) -> int:
         return int(self.hwnd)

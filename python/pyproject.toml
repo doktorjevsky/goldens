@@ -1,24 +1,34 @@
 [build-system]
-requires = ["setuptools>=69"]
+requires = ["setuptools>=77.0.3"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "litewinwrap"
-version = "0.1.0"
-description = "Small stateless Win32 desktop scripting primitives"
+version = "0.1.0a3"
+description = "Small image-driven Windows desktop automation"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "Simon Porsgaard" }]
+keywords = ["windows", "desktop-automation", "image-matching", "testing"]
 dependencies = [
   "numpy>=1.26",
   "opencv-python-headless>=4.9",
 ]
 classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
   "Operating System :: Microsoft :: Windows :: Windows 11",
   "Programming Language :: Python :: 3",
+  "Topic :: Software Development :: Testing",
   "Typing :: Typed",
 ]
+
+[project.urls]
+Homepage = "https://github.com/doktorjevsky/goldens"
+Issues = "https://github.com/doktorjevsky/goldens/issues"
+Repository = "https://github.com/doktorjevsky/goldens"
 
 [tool.setuptools.packages.find]
 where = ["src"]

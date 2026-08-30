@@ -197,10 +197,13 @@ For adversarial JSON conformance coverage, clone the MIT-licensed
 must-accept and 188 must-reject cases; the suite's 35 implementation-defined
 cases are counted and reported but deliberately not treated as pass/fail.
 
-## Python scripting prototype
+## Python automation package
 
-The [`python`](python) subproject contains a first-pass Windows scripting layer
-for live window discovery, child-window enumeration, mouse and keyboard input,
-OpenCV template matching, and loading individual PNG/JSON pairs or recursive
-resource roots as mappings of path-qualified targets.
-The native Goldens application remains dependency-free.
+The [`python`](python) subproject provides image-driven Windows desktop
+automation around Goldens resources. An `Automation` session owns discovery,
+matching, timing, and settling policy; its bound windows expose focused text,
+key, capture, locate, and click actions through one high-level workflow.
+Individual PNG/JSON pairs and recursive resource roots load as mappings of
+path-qualified targets. Raw Win32, mouse, keyboard, and OpenCV matching modules
+remain available as advanced escape hatches. The native Goldens application
+remains dependency-free.
