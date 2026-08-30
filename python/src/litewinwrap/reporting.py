@@ -1,0 +1,839 @@
+from __future__ import annotations
+
+import inspect
+import json
+import os
+import platform
+import re
+import sys
+import time
+import traceback
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from functools import wraps
+from html import escape
+from io import BytesIO
+from math import isfinite
+from pathlib import Path
+from typing import Any, Literal, ParamSpec, TypeVar
+
+import cv2
+import numpy as np
+
+from .types import Capture, HWND, Match, Point, Rect, Target
+
+
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
+
+_CURRENT_RUN: ContextVar[_Run | None] = ContextVar(
+    "litewinwrap_current_report_run",
+    default=None,
+)
+_CURRENT_STEP_ID: ContextVar[int | None] = ContextVar(
+    "litewinwrap_current_report_step",
+    default=None,
+)
+_ACTION_DEPTH: ContextVar[int] = ContextVar(
+    "litewinwrap_report_action_depth",
+    default=0,
+)
+_CAPTURE_ENABLED: ContextVar[bool] = ContextVar(
+    "litewinwrap_report_capture_enabled",
+    default=True,
+)
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _slug(value: str) -> str:
+    result = re.sub(r"[^a-z0-9]+", "-", value.casefold()).strip("-")
+    return result or "automation-test"
+
+
+def _json_value(value: Any) -> Any:
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, Mapping):
+        return {str(key): _json_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_value(item) for item in value]
+    return repr(value)
+
+
+def _point_value(point: Point | tuple[int, int] | None) -> list[int] | None:
+    return None if point is None else [int(point[0]), int(point[1])]
+
+
+def _rect_value(rect: Rect | None) -> list[int] | None:
+    return None if rect is None else [int(value) for value in rect]
+
+
+@dataclass(slots=True)
+class _Frame:
+    png: bytes
+    capture_rect: Rect
+    action_id: int | None
+    action: str
+    step: str | None
+    details: dict[str, Any]
+
+
+@dataclass(slots=True)
+class _Run:
+    reports: Reports
+    test_id: str
+    title: str
+    owner: str | None
+    purpose: str | None
+    source_file: str | None
+    source_line: int | None
+    capture_frames: bool
+    started_at: datetime = field(default_factory=_utc_now)
+    started_seconds: float = field(default_factory=time.monotonic)
+    actions: list[dict[str, Any]] = field(default_factory=list)
+    steps: list[dict[str, Any]] = field(default_factory=list)
+    frames: list[_Frame] = field(default_factory=list)
+    capture_errors: list[str] = field(default_factory=list)
+    active_hwnd: HWND | None = None
+    _next_action_id: int = 1
+    _next_step_id: int = 1
+
+    def elapsed_seconds(self) -> float:
+        return time.monotonic() - self.started_seconds
+
+    def next_action_id(self) -> int:
+        value = self._next_action_id
+        self._next_action_id += 1
+        return value
+
+    def next_step_id(self) -> int:
+        value = self._next_step_id
+        self._next_step_id += 1
+        return value
+
+    def step_title(self, step_id: int | None) -> str | None:
+        if step_id is None:
+            return None
+        return next(
+            (item["title"] for item in self.steps if item["id"] == step_id),
+            None,
+        )
+
+    def capture(
+        self,
+        *,
+        action_id: int | None,
+        action: str,
+        details: dict[str, Any],
+        capture_value: Capture | None = None,
+    ) -> None:
+        if not self.capture_frames or not _CAPTURE_ENABLED.get():
+            return
+        try:
+            if capture_value is None:
+                if self.active_hwnd is None:
+                    return
+                from . import match as image_match
+
+                capture_value = image_match.capture(self.active_hwnd)
+            success, encoded = cv2.imencode(
+                ".png",
+                np.ascontiguousarray(capture_value.pixels),
+            )
+            if not success:
+                raise OSError("OpenCV could not encode the captured frame")
+            step_id = _CURRENT_STEP_ID.get()
+            self.frames.append(
+                _Frame(
+                    png=encoded.tobytes(),
+                    capture_rect=capture_value.rect,
+                    action_id=action_id,
+                    action=action,
+                    step=self.step_title(step_id),
+                    details=dict(details),
+                )
+            )
+            if len(self.frames) > self.reports.max_frames:
+                del self.frames[: len(self.frames) - self.reports.max_frames]
+        except Exception as error:
+            self.capture_errors.append(f"{type(error).__name__}: {error}")
+
+
+class _ActionSpan:
+    __slots__ = ("_capture", "_run", "details", "hwnd")
+
+    def __init__(
+        self,
+        run: _Run | None,
+        *,
+        hwnd: HWND | int | None,
+    ) -> None:
+        self._run = run
+        self._capture: Capture | None = None
+        self.details: dict[str, Any] = {}
+        self.hwnd = HWND(int(hwnd)) if hwnd is not None else None
+
+    def add(self, **details: Any) -> None:
+        self.details.update(details)
+
+    def set_hwnd(self, hwnd: HWND | int) -> None:
+        self.hwnd = HWND(int(hwnd))
+
+    def attach_capture(self, capture_value: Capture) -> None:
+        self._capture = capture_value
+
+
+def _trace(
+    action: str,
+    *,
+    hwnd_parameter: str | None = None,
+    capture: bool = True,
+) -> Callable[[Callable[_P, _R]], Callable[_P, _R]]:
+    """Instrument one synchronous public operation when a report is active."""
+
+    def decorate(function: Callable[_P, _R]) -> Callable[_P, _R]:
+        signature = inspect.signature(function)
+
+        @wraps(function)
+        def wrapped(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+            if _CURRENT_RUN.get() is None:
+                return function(*args, **kwargs)
+            bound = signature.bind_partial(*args, **kwargs)
+            details = _argument_details(bound.arguments)
+            hwnd: HWND | int | None = None
+            if args and hasattr(args[0], "hwnd"):
+                hwnd = getattr(args[0], "hwnd")
+            if hwnd_parameter is not None:
+                candidate = bound.arguments.get(hwnd_parameter)
+                if hasattr(candidate, "hwnd"):
+                    hwnd = getattr(candidate, "hwnd")
+                elif isinstance(candidate, int):
+                    hwnd = candidate
+
+            with _action(
+                action,
+                hwnd=hwnd,
+                details=details,
+                capture=capture,
+            ) as span:
+                for value in bound.arguments.values():
+                    if isinstance(value, Capture):
+                        span.attach_capture(value)
+                        break
+                result = function(*args, **kwargs)
+                result_details, result_capture, result_hwnd = _result_details(result)
+                span.add(**result_details)
+                if result_capture is not None:
+                    span.attach_capture(result_capture)
+                if result_hwnd is not None:
+                    span.set_hwnd(result_hwnd)
+                return result
+
+        return wrapped
+
+    return decorate
+
+
+def _argument_details(arguments: Mapping[str, Any]) -> dict[str, Any]:
+    details: dict[str, Any] = {}
+    for name, value in arguments.items():
+        if name in {"self", "cls"}:
+            continue
+        if name == "text" and isinstance(value, str):
+            details["characters"] = len(value)
+            continue
+        if isinstance(value, Target):
+            height, width = value.pixels.shape[:2]
+            details["target"] = value.name
+            details["target_size"] = [width, height]
+            if value.click is not None:
+                details["target_click"] = list(value.click)
+            continue
+        if isinstance(value, Capture):
+            details["capture_rect"] = _rect_value(value.rect)
+            continue
+        if isinstance(value, Point):
+            details[name] = _point_value(value)
+            continue
+        if isinstance(value, Rect):
+            details[name] = _rect_value(value)
+            continue
+        if name in {"point", "destination", "origin"} and value is not None:
+            details[name] = _point_value(value)
+            continue
+        details[name] = _json_value(value)
+    return details
+
+
+def _result_details(
+    result: Any,
+) -> tuple[dict[str, Any], Capture | None, HWND | None]:
+    if isinstance(result, Capture):
+        return {"capture_rect": _rect_value(result.rect)}, result, None
+    if isinstance(result, Match):
+        return (
+            {
+                "match_score": result.score,
+                "match_rect": _rect_value(result.rect),
+                "point": _point_value(result.click),
+            },
+            None,
+            None,
+        )
+    if isinstance(result, Rect):
+        return {"result_rect": _rect_value(result)}, None, None
+    if hasattr(result, "hwnd"):
+        return {"hwnd": int(result.hwnd)}, None, HWND(int(result.hwnd))
+    if isinstance(result, tuple):
+        details: dict[str, Any] = {"result_count": len(result)}
+        if result and all(isinstance(item, Match) for item in result):
+            details["matches"] = [
+                {
+                    "score": item.score,
+                    "rect": _rect_value(item.rect),
+                    "click": _point_value(item.click),
+                }
+                for item in result
+            ]
+        return details, None, None
+    if isinstance(result, int) and not isinstance(result, bool):
+        return {"events_sent": result}, None, None
+    return {}, None, None
+
+
+@contextmanager
+def _action(
+    action: str,
+    *,
+    hwnd: HWND | int | None = None,
+    details: Mapping[str, Any] | None = None,
+    capture: bool = True,
+) -> Iterator[_ActionSpan]:
+    run = _CURRENT_RUN.get()
+    span = _ActionSpan(run, hwnd=hwnd)
+    if details:
+        span.add(**dict(details))
+    if run is None:
+        yield span
+        return
+
+    action_id = run.next_action_id()
+    depth = _ACTION_DEPTH.get()
+    depth_token = _ACTION_DEPTH.set(depth + 1)
+    started_seconds = run.elapsed_seconds()
+    started_clock = time.monotonic()
+    status = "passed"
+    error_type: str | None = None
+    error_message: str | None = None
+    try:
+        yield span
+    except Exception as error:
+        status = "failed"
+        error_type = type(error).__name__
+        error_message = str(error)
+        last_capture = getattr(error, "last_capture", None)
+        if isinstance(last_capture, Capture):
+            span.attach_capture(last_capture)
+        raise
+    finally:
+        duration_seconds = time.monotonic() - started_clock
+        _ACTION_DEPTH.reset(depth_token)
+        if span.hwnd is not None:
+            run.active_hwnd = span.hwnd
+        event = {
+            "id": action_id,
+            "action": action,
+            "step_id": _CURRENT_STEP_ID.get(),
+            "depth": depth,
+            "status": status,
+            "started_seconds": started_seconds,
+            "duration_seconds": duration_seconds,
+            "details": _json_value(span.details),
+        }
+        if error_type is not None:
+            event["error"] = {
+                "type": error_type,
+                "message": error_message,
+            }
+        run.actions.append(event)
+        if capture and depth == 0:
+            run.capture(
+                action_id=action_id,
+                action=action,
+                details=span.details,
+                capture_value=span._capture,
+            )
+
+
+class Reports:
+    """Configure per-test static failure reports for automation scripts."""
+
+    def __init__(
+        self,
+        artifact_directory: str | os.PathLike[str],
+        *,
+        retain: Literal["failures"] = "failures",
+        capture_frames: bool = True,
+        max_frames: int = 40,
+        frame_duration_seconds: float = 0.6,
+    ) -> None:
+        if retain != "failures":
+            raise ValueError("The MVP supports retain='failures' only")
+        if not isinstance(capture_frames, bool):
+            raise TypeError("capture_frames must be a boolean")
+        if max_frames <= 0:
+            raise ValueError("max_frames must be positive")
+        if not isfinite(frame_duration_seconds) or frame_duration_seconds <= 0.0:
+            raise ValueError("frame_duration_seconds must be a finite positive number")
+        self.artifact_directory = Path(artifact_directory)
+        self.retain = retain
+        self.capture_frames = capture_frames
+        self.max_frames = max_frames
+        self.frame_duration_seconds = float(frame_duration_seconds)
+        self.last_report: Path | None = None
+
+    def test(
+        self,
+        *,
+        title: str,
+        owner: str | None = None,
+        purpose: str | None = None,
+        test_id: str | None = None,
+        capture_frames: bool | None = None,
+    ) -> Callable[[Callable[_P, _R]], Callable[_P, _R]]:
+        """Decorate one independently reported automation test."""
+
+        if not title.strip():
+            raise ValueError("A report test title is required")
+        if capture_frames is not None and not isinstance(capture_frames, bool):
+            raise TypeError("capture_frames must be a boolean or None")
+
+        def decorate(function: Callable[_P, _R]) -> Callable[_P, _R]:
+            source_file = inspect.getsourcefile(function)
+            try:
+                source_line = inspect.getsourcelines(function)[1]
+            except (OSError, TypeError):
+                source_line = None
+            resolved_test_id = test_id or function.__name__
+
+            @wraps(function)
+            def wrapped(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+                if _CURRENT_RUN.get() is not None:
+                    raise RuntimeError("Reported tests cannot be nested")
+                run = _Run(
+                    reports=self,
+                    test_id=resolved_test_id,
+                    title=title,
+                    owner=owner,
+                    purpose=purpose,
+                    source_file=source_file,
+                    source_line=source_line,
+                    capture_frames=(
+                        self.capture_frames
+                        if capture_frames is None
+                        else capture_frames
+                    ),
+                )
+                run_token = _CURRENT_RUN.set(run)
+                step_token = _CURRENT_STEP_ID.set(None)
+                depth_token = _ACTION_DEPTH.set(0)
+                capture_token = _CAPTURE_ENABLED.set(True)
+                try:
+                    return function(*args, **kwargs)
+                except Exception as error:
+                    if not run.actions or run.actions[-1]["status"] != "failed":
+                        run.capture(
+                            action_id=None,
+                            action="Test failure",
+                            details={},
+                            capture_value=(
+                                getattr(error, "last_capture", None)
+                                if isinstance(
+                                    getattr(error, "last_capture", None), Capture
+                                )
+                                else None
+                            ),
+                        )
+                    try:
+                        report = self._write_failure(run, error)
+                    except Exception as report_error:
+                        error.add_note(
+                            "litewinwrap could not write its failure report: "
+                            f"{type(report_error).__name__}: {report_error}"
+                        )
+                    else:
+                        self.last_report = report
+                        error.add_note(f"litewinwrap report: {report}")
+                        print(f"litewinwrap report: {report}", file=sys.stderr)
+                    raise
+                finally:
+                    _CAPTURE_ENABLED.reset(capture_token)
+                    _ACTION_DEPTH.reset(depth_token)
+                    _CURRENT_STEP_ID.reset(step_token)
+                    _CURRENT_RUN.reset(run_token)
+
+            return wrapped
+
+        return decorate
+
+    @contextmanager
+    def step(
+        self,
+        title: str,
+        *,
+        capture_frames: bool | None = None,
+    ) -> Iterator[None]:
+        """Add a human-readable step to the active reported test."""
+
+        run = _CURRENT_RUN.get()
+        if run is None or run.reports is not self:
+            raise RuntimeError("reports.step() must run inside @reports.test")
+        if not title.strip():
+            raise ValueError("A report step title is required")
+        if capture_frames is not None and not isinstance(capture_frames, bool):
+            raise TypeError("capture_frames must be a boolean or None")
+
+        step_id = run.next_step_id()
+        step = {
+            "id": step_id,
+            "title": title,
+            "status": "running",
+            "started_seconds": run.elapsed_seconds(),
+            "duration_seconds": None,
+        }
+        run.steps.append(step)
+        started_seconds = time.monotonic()
+        step_token = _CURRENT_STEP_ID.set(step_id)
+        capture_token = None
+        if capture_frames is not None:
+            capture_token = _CAPTURE_ENABLED.set(capture_frames)
+        try:
+            yield
+        except Exception:
+            step["status"] = "failed"
+            raise
+        else:
+            step["status"] = "passed"
+        finally:
+            step["duration_seconds"] = time.monotonic() - started_seconds
+            if capture_token is not None:
+                _CAPTURE_ENABLED.reset(capture_token)
+            _CURRENT_STEP_ID.reset(step_token)
+
+    def _write_failure(self, run: _Run, error: Exception) -> Path:
+        timestamp = run.started_at.strftime("%Y%m%d-%H%M%S-%fZ")
+        directory = self.artifact_directory / f"{_slug(run.test_id)}--{timestamp}"
+        images_directory = directory / "images"
+        images_directory.mkdir(parents=True, exist_ok=False)
+
+        media = _write_media(
+            run.frames,
+            directory=directory,
+            images_directory=images_directory,
+            frame_duration_seconds=self.frame_duration_seconds,
+        )
+        finished_at = _utc_now()
+        trace = {
+            "schema_version": 1,
+            "status": "failed",
+            "test": {
+                "id": run.test_id,
+                "title": run.title,
+                "owner": run.owner,
+                "purpose": run.purpose,
+                "source_file": run.source_file,
+                "source_line": run.source_line,
+            },
+            "started_at": run.started_at.isoformat(),
+            "finished_at": finished_at.isoformat(),
+            "duration_seconds": run.elapsed_seconds(),
+            "failure": _failure_details(error),
+            "steps": run.steps,
+            "actions": sorted(
+                run.actions,
+                key=lambda item: item["started_seconds"],
+            ),
+            "frames": media["frames"],
+            "capture_errors": run.capture_errors,
+            "environment": {
+                "python": sys.version,
+                "platform": platform.platform(),
+                "executable": sys.executable,
+                "working_directory": os.getcwd(),
+                "litewinwrap": _package_version(),
+            },
+        }
+        (directory / "trace.json").write_text(
+            json.dumps(trace, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        (directory / "index.html").write_text(
+            _render_html(trace, media),
+            encoding="utf-8",
+        )
+        return directory / "index.html"
+
+
+def _package_version() -> str:
+    package = sys.modules.get("litewinwrap")
+    return str(getattr(package, "__version__", "unknown"))
+
+
+def _failure_details(error: Exception) -> dict[str, Any]:
+    details: dict[str, Any] = {
+        "type": type(error).__name__,
+        "message": str(error),
+        "traceback": "".join(
+            traceback.format_exception(type(error), error, error.__traceback__)
+        ),
+    }
+    target = getattr(error, "target", None)
+    if target is not None:
+        details["target"] = getattr(target, "name", repr(target))
+    for name in (
+        "threshold",
+        "best_score",
+        "elapsed_seconds",
+        "attempts",
+    ):
+        if hasattr(error, name):
+            details[name] = _json_value(getattr(error, name))
+    matches = getattr(error, "matches", None)
+    if matches is not None:
+        details["matches"] = [
+            {
+                "score": item.score,
+                "rect": _rect_value(item.rect),
+                "click": _point_value(item.click),
+            }
+            if isinstance(item, Match)
+            else repr(item)
+            for item in matches
+        ]
+    windows = getattr(error, "windows", None)
+    if windows is not None:
+        details["window_handles"] = [int(window.hwnd) for window in windows]
+    return details
+
+
+def _write_media(
+    frames: list[_Frame],
+    *,
+    directory: Path,
+    images_directory: Path,
+    frame_duration_seconds: float,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "gif": None,
+        "final_image": None,
+        "frames": [],
+    }
+    if not frames:
+        return result
+
+    from PIL import Image, ImageDraw, ImageFont
+
+    try:
+        label_font = ImageFont.truetype("DejaVuSans.ttf", 16)
+    except OSError:
+        label_font = ImageFont.load_default()
+
+    prepared: list[Image.Image] = []
+    for index, frame in enumerate(frames, start=1):
+        filename = f"frame-{index:03d}.png"
+        (images_directory / filename).write_bytes(frame.png)
+        result["frames"].append(
+            {
+                "path": f"images/{filename}",
+                "action_id": frame.action_id,
+                "action": frame.action,
+                "step": frame.step,
+            }
+        )
+        image = Image.open(BytesIO(frame.png)).convert("RGB")
+        draw = ImageDraw.Draw(image)
+        match_rect = frame.details.get("match_rect")
+        if isinstance(match_rect, (list, tuple)) and len(match_rect) == 4:
+            left, top, right, bottom = (int(value) for value in match_rect)
+            draw.rectangle(
+                (
+                    left - frame.capture_rect.left,
+                    top - frame.capture_rect.top,
+                    right - frame.capture_rect.left,
+                    bottom - frame.capture_rect.top,
+                ),
+                outline=(245, 158, 11),
+                width=3,
+            )
+        point = frame.details.get("point")
+        if isinstance(point, (list, tuple)) and len(point) == 2:
+            x = int(point[0]) - frame.capture_rect.left
+            y = int(point[1]) - frame.capture_rect.top
+            draw.ellipse((x - 8, y - 8, x + 8, y + 8), outline=(239, 68, 68), width=4)
+        image.thumbnail((1200, 800), Image.Resampling.LANCZOS)
+        prepared.append(image)
+
+    width = max(image.width for image in prepared)
+    height = max(image.height for image in prepared)
+    rendered: list[Image.Image] = []
+    for image, frame in zip(prepared, frames, strict=True):
+        canvas = Image.new("RGB", (width, height + 44), (17, 24, 39))
+        x = (width - image.width) // 2
+        y = (height - image.height) // 2
+        canvas.paste(image, (x, y))
+        label = f"{frame.step} · {frame.action}" if frame.step else frame.action
+        ImageDraw.Draw(canvas).text(
+            (12, height + 12),
+            label,
+            fill=(241, 245, 249),
+            font=label_font,
+        )
+        rendered.append(canvas)
+
+    final_image = directory / "failure.png"
+    rendered[-1].save(final_image, format="PNG")
+    gif = directory / "failure.gif"
+    rendered[0].save(
+        gif,
+        format="GIF",
+        save_all=True,
+        append_images=rendered[1:],
+        duration=max(1, round(frame_duration_seconds * 1000)),
+        loop=0,
+        disposal=2,
+    )
+    result["gif"] = gif.name
+    result["final_image"] = final_image.name
+    return result
+
+
+def _render_html(trace: dict[str, Any], media: dict[str, Any]) -> str:
+    test = trace["test"]
+    failure = trace["failure"]
+    step_names = {item["id"]: item["title"] for item in trace["steps"]}
+
+    metadata = [
+        ("Test", test["title"]),
+        ("Owner", test.get("owner")),
+        ("Purpose", test.get("purpose")),
+        ("Duration", f"{trace['duration_seconds']:.3f} seconds"),
+        ("Started", trace["started_at"]),
+    ]
+    if test.get("source_file"):
+        source = test["source_file"]
+        if test.get("source_line"):
+            source = f"{source}:{test['source_line']}"
+        metadata.append(("Source", source))
+
+    failure_facts = [
+        (key.replace("_", " ").title(), value)
+        for key, value in failure.items()
+        if key not in {"traceback", "message", "matches"}
+    ]
+    if failure.get("matches") is not None:
+        failure_facts.append(("Matches", len(failure["matches"])))
+
+    step_rows = (
+        "".join(
+            "<tr>"
+            f"<td>{escape(item['title'])}</td>"
+            f"<td><span class='status {escape(item['status'])}'>{escape(item['status'])}</span></td>"
+            f"<td>{float(item['duration_seconds'] or 0.0):.3f}s</td>"
+            "</tr>"
+            for item in trace["steps"]
+        )
+        or "<tr><td colspan='3' class='muted'>No named steps</td></tr>"
+    )
+
+    action_rows = (
+        "".join(
+            "<tr>"
+            f"<td>{float(item['started_seconds']):.3f}s</td>"
+            f"<td>{escape(step_names.get(item.get('step_id'), '—'))}</td>"
+            f"<td style='padding-left:{12 + int(item['depth']) * 18}px'>{escape(item['action'])}</td>"
+            f"<td><span class='status {escape(item['status'])}'>{escape(item['status'])}</span></td>"
+            f"<td>{float(item['duration_seconds']):.3f}s</td>"
+            "<td><details><summary>View</summary>"
+            f"<pre>{escape(json.dumps(item['details'], ensure_ascii=False, indent=2))}</pre>"
+            "</details></td>"
+            "</tr>"
+            for item in trace["actions"]
+        )
+        or "<tr><td colspan='6' class='muted'>No automation actions were recorded</td></tr>"
+    )
+
+    metadata_html = _fact_grid(metadata)
+    failure_html = _fact_grid([("Message", failure["message"]), *failure_facts])
+    environment_html = _fact_grid(list(trace["environment"].items()))
+    visual_html = ""
+    if media.get("gif"):
+        visual_html = (
+            "<section><h2>Sequence</h2>"
+            f"<img class='visual' src='{escape(media['gif'])}' alt='Recorded action sequence'>"
+            "</section>"
+        )
+    final_html = ""
+    if media.get("final_image"):
+        final_html = (
+            "<section><h2>Final frame</h2>"
+            f"<img class='visual' src='{escape(media['final_image'])}' alt='Final captured frame'>"
+            "</section>"
+        )
+    capture_errors = ""
+    if trace["capture_errors"]:
+        capture_errors = (
+            "<details><summary>Capture errors</summary><pre>"
+            + escape("\n".join(trace["capture_errors"]))
+            + "</pre></details>"
+        )
+
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{escape(test["title"])} — failed</title>
+<style>
+:root {{ color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }}
+body {{ margin: 0; background: #f5f7fb; color: #172033; }}
+main {{ max-width: 1120px; margin: 0 auto; padding: 36px 24px 72px; }}
+header, section {{ background: white; border: 1px solid #dbe2ea; border-radius: 12px; padding: 22px; margin-bottom: 18px; box-shadow: 0 2px 8px #1720330d; }}
+h1 {{ margin: 8px 0 20px; font-size: 28px; }} h2 {{ margin-top: 0; font-size: 18px; }}
+.badge {{ display: inline-block; color: #991b1b; background: #fee2e2; border-radius: 999px; padding: 5px 10px; font-weight: 700; font-size: 12px; letter-spacing: .05em; }}
+.facts {{ display: grid; grid-template-columns: minmax(120px, 180px) 1fr; gap: 8px 18px; }}
+.facts dt {{ color: #64748b; font-weight: 600; }} .facts dd {{ margin: 0; overflow-wrap: anywhere; }}
+.visual {{ display: block; max-width: 100%; height: auto; border: 1px solid #cbd5e1; border-radius: 8px; }}
+table {{ width: 100%; border-collapse: collapse; font-size: 14px; }}
+th, td {{ padding: 10px 12px; text-align: left; border-bottom: 1px solid #e2e8f0; vertical-align: top; }}
+th {{ color: #475569; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }}
+.status {{ font-weight: 700; }} .status.failed {{ color: #b91c1c; }} .status.passed {{ color: #047857; }}
+.muted {{ color: #64748b; }} pre {{ white-space: pre-wrap; overflow-wrap: anywhere; background: #0f172a; color: #e2e8f0; border-radius: 8px; padding: 14px; overflow: auto; }}
+summary {{ cursor: pointer; color: #334155; font-weight: 600; }}
+</style>
+</head>
+<body><main>
+<header><span class="badge">FAILED</span><h1>{escape(test["title"])}</h1>{metadata_html}</header>
+<section><h2>Failure</h2>{failure_html}</section>
+{visual_html}{final_html}
+<section><h2>Steps</h2><table><thead><tr><th>Step</th><th>Status</th><th>Duration</th></tr></thead><tbody>{step_rows}</tbody></table></section>
+<section><h2>Actions</h2><table><thead><tr><th>Time</th><th>Step</th><th>Action</th><th>Status</th><th>Duration</th><th>Data</th></tr></thead><tbody>{action_rows}</tbody></table></section>
+<section><h2>Environment</h2>{environment_html}</section>
+<section><details><summary>Traceback</summary><pre>{escape(failure["traceback"])}</pre></details>{capture_errors}</section>
+</main></body></html>"""
+
+
+def _fact_grid(items: list[tuple[str, Any]]) -> str:
+    values = "".join(
+        f"<dt>{escape(str(label))}</dt><dd>{escape(str(value))}</dd>"
+        for label, value in items
+        if value is not None and value != ""
+    )
+    return f"<dl class='facts'>{values}</dl>"

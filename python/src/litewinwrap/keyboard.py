@@ -5,7 +5,7 @@ from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from typing import TypeAlias
 
-from . import win32
+from . import reporting, win32
 
 
 KEYEVENTF_EXTENDEDKEY = 0x0001
@@ -197,12 +197,14 @@ def _unicode_input(unit: int, flags: int = 0) -> win32.INPUT:
     return value
 
 
+@reporting._trace("Key down")
 def down(key: Key) -> int:
     """Hold one named key down until a corresponding ``up`` call."""
 
     return win32.send_input([_key_input(_key_code(key))])
 
 
+@reporting._trace("Key up")
 def up(key: Key) -> int:
     """Release one named key."""
 
@@ -223,16 +225,18 @@ def hold(*keys: Key) -> Iterator[None]:
 
     if not keys:
         raise ValueError("At least one key is required")
-    codes = tuple(_key_code(key) for key in keys)
-    win32.send_input([_key_input(code) for code in codes])
-    try:
-        yield
-    finally:
-        win32.send_input(
-            [_key_input(code, KEYEVENTF_KEYUP) for code in reversed(codes)]
-        )
+    with reporting._action("Hold keys", details={"keys": keys}):
+        codes = tuple(_key_code(key) for key in keys)
+        win32.send_input([_key_input(code) for code in codes])
+        try:
+            yield
+        finally:
+            win32.send_input(
+                [_key_input(code, KEYEVENTF_KEYUP) for code in reversed(codes)]
+            )
 
 
+@reporting._trace("Press keys")
 def press(*keys: Key, count: int = 1, interval_seconds: float = 0.0) -> int:
     """Press one key or a chord such as ``press("ctrl", "q")``."""
 
@@ -259,6 +263,7 @@ def hotkey(*keys: Key) -> int:
     return press(*keys)
 
 
+@reporting._trace("Write text")
 def write(
     text: str,
     *,
@@ -292,6 +297,7 @@ def write(
     return sent
 
 
+@reporting._trace("Type text")
 def type_text(
     text: str,
     *,
@@ -307,6 +313,7 @@ def type_text(
     )
 
 
+@reporting._trace("Release keys")
 def release(keys: Iterable[Key]) -> int:
     return win32.send_input(
         _key_input(_key_code(key), KEYEVENTF_KEYUP) for key in keys

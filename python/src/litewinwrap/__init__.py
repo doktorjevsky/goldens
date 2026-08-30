@@ -1,7 +1,8 @@
-from . import keyboard, match, mouse, win32
+from . import keyboard, match, mouse, reporting, win32
 from .automation import Automation
 from .goldens import Goldens, GoldensFormatError
 from .match import TargetAmbiguousError, TargetNotFoundError
+from .reporting import Reports
 from .types import Capture, HWND, Match, Point, Rect, Target
 from .window import (
     FocusTimeoutError,
@@ -23,6 +24,7 @@ __all__ = [
     "Match",
     "Point",
     "Rect",
+    "Reports",
     "Target",
     "TargetAmbiguousError",
     "TargetNotFoundError",
@@ -33,7 +35,8 @@ __all__ = [
     "keyboard",
     "match",
     "mouse",
+    "reporting",
     "win32",
 ]
 
-__version__ = "0.1.0a3"
+__version__ = "0.1.0a4"

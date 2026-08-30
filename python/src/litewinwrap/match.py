@@ -6,7 +6,7 @@ from math import isfinite
 import cv2
 import numpy as np
 
-from . import mouse, win32
+from . import mouse, reporting, win32
 from .types import Capture, HWND, Match, Point, Rect, Target
 from .window import Window
 
@@ -187,6 +187,7 @@ def _matches_and_best_score(
     return tuple(matches), best_score
 
 
+@reporting._trace("Match all targets")
 def match_all(
     capture_value: Capture,
     target: Target,
@@ -223,6 +224,7 @@ def _not_found(
     )
 
 
+@reporting._trace("Match target")
 def match(
     capture_value: Capture,
     target: Target,
@@ -247,6 +249,7 @@ def match(
     raise _not_found(capture_value, target, threshold, best_score)
 
 
+@reporting._trace("Match best target")
 def best_match(
     capture_value: Capture,
     target: Target,
@@ -269,6 +272,7 @@ def best_match(
     raise _not_found(capture_value, target, threshold, best_score)
 
 
+@reporting._trace("Find all targets", hwnd_parameter="window")
 def find_all(
     window: Window | HWND | int,
     target: Target,
@@ -296,6 +300,7 @@ def find_all(
         time.sleep(min(_POLL_INTERVAL_SECONDS, remaining_seconds))
 
 
+@reporting._trace("Find target", hwnd_parameter="window")
 def find(
     window: Window | HWND | int,
     target: Target,
@@ -345,6 +350,7 @@ def find(
         time.sleep(min(_POLL_INTERVAL_SECONDS, remaining_seconds))
 
 
+@reporting._trace("Find best target", hwnd_parameter="window")
 def find_best(
     window: Window | HWND | int,
     target: Target,
@@ -387,6 +393,7 @@ def find_best(
         time.sleep(min(_POLL_INTERVAL_SECONDS, remaining_seconds))
 
 
+@reporting._trace("Find and click target", hwnd_parameter="window")
 def click(
     window: Window | HWND | int,
     target: Target,
@@ -414,6 +421,7 @@ def click(
     return found
 
 
+@reporting._trace("Find and click best target", hwnd_parameter="window")
 def click_best(
     window: Window | HWND | int,
     target: Target,

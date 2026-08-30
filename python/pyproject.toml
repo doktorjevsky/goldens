@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "litewinwrap"
-version = "0.1.0a3"
+version = "0.1.0a4"
 description = "Small image-driven Windows desktop automation"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -15,6 +15,7 @@ keywords = ["windows", "desktop-automation", "image-matching", "testing"]
 dependencies = [
   "numpy>=1.26",
   "opencv-python-headless>=4.9",
+  "Pillow>=10.0",
 ]
 classifiers = [
   "Development Status :: 3 - Alpha",
