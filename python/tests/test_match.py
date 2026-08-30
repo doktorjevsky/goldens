@@ -39,6 +39,19 @@ class MatchTests(unittest.TestCase):
         self.assertEqual(found.click, Point(134, 226))
         self.assertGreaterEqual(found.score, 0.99)
 
+    def test_target_without_click_point_uses_its_center(self) -> None:
+        pixels = np.zeros((60, 80, 3), dtype=np.uint8)
+        pixels[19:29, 31:43] = self.template
+        capture = Capture(pixels, Rect(100, 200, 180, 260))
+
+        found = match(
+            capture,
+            Target("button", self.template),
+            threshold=0.99,
+        )
+
+        self.assertEqual(found.click, Point(137, 224))
+
     def test_keeps_distinct_occurrences(self) -> None:
         pixels = np.zeros((60, 80, 3), dtype=np.uint8)
         pixels[5:15, 6:18] = self.template

@@ -17,7 +17,7 @@ environment:
 ```powershell
 py -m venv C:\Tools\litewinwrap-env
 C:\Tools\litewinwrap-env\Scripts\python -m pip install `
-    C:\Transfer\litewinwrap-0.1.0a1-py3-none-any.whl
+    C:\Transfer\litewinwrap-0.1.0a2-py3-none-any.whl
 ```
 
 For editable development from this directory:
@@ -169,6 +169,7 @@ capture = window.capture()
 match = window.locate(submit)
 matches = window.locate_all(submit)
 best = window.locate_best(submit)
+hovered = window.hover(submit)
 clicked = window.click(submit)
 clicked_best = window.click_best(submit)
 ```
@@ -176,7 +177,9 @@ clicked_best = window.click_best(submit)
 `locate()` and `click()` require exactly one distinct occurrence. Choosing the
 highest-scoring occurrence is deliberately explicit. A failed search raises
 `TargetNotFoundError` with the best score and last capture; multiple occurrences
-raise `TargetAmbiguousError`.
+raise `TargetAmbiguousError`. `hover()` moves to the target's annotated click
+point, or its center when no click point was saved, then uses the session's
+settling policy so hover-driven UI has time to render.
 
 ## Text and keys
 
@@ -206,13 +209,32 @@ from litewinwrap import keyboard, match, mouse, win32
 keyboard.type_text("literal Unicode")
 keyboard.press("ctrl", "q")
 mouse.click((100, 200))
+mouse.move_to((300, 200))
+mouse.move_by(100, 0)
+mouse.drag_to((500, 200))
+mouse.drag_by(100, 0)
 match.match(capture, target)
 win32.get_window_rect(hwnd)
 ```
 
 These primitives do not all establish focus or inherit an `Automation`
 session. Integer Win32 virtual-key codes and explicit key down/up operations are
-available here as escape hatches.
+available here as escape hatches. Context managers compose modifiers and pointer
+gestures without building special cases into every action:
+
+```python
+window.hover(submit)
+with keyboard.hold("ctrl"):
+    mouse.drag_by(100, 0)
+
+with keyboard.hold("ctrl", "shift"):
+    with mouse.hold("left"):
+        mouse.move_by(100, 0)
+```
+
+Both `hold()` context managers release their keys or button even if the block
+raises. For unusual interactions, `keyboard.down()` / `keyboard.up()` and
+`mouse.button_down()` / `mouse.button_up()` remain fully explicit.
 
 `subprocess.Popen` remains the normal way to launch applications. Pass an
 argument list and avoid `shell=True` for values assembled from external input.

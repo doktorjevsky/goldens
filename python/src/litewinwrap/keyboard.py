@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
 from typing import TypeAlias
 
 from . import win32
@@ -214,6 +215,22 @@ def key_down(key: Key) -> int:
 
 def key_up(key: Key) -> int:
     return up(key)
+
+
+@contextmanager
+def hold(*keys: Key) -> Iterator[None]:
+    """Hold a key or chord for the duration of a ``with`` block."""
+
+    if not keys:
+        raise ValueError("At least one key is required")
+    codes = tuple(_key_code(key) for key in keys)
+    win32.send_input([_key_input(code) for code in codes])
+    try:
+        yield
+    finally:
+        win32.send_input(
+            [_key_input(code, KEYEVENTF_KEYUP) for code in reversed(codes)]
+        )
 
 
 def press(*keys: Key, count: int = 1, interval_seconds: float = 0.0) -> int:

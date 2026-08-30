@@ -58,6 +58,50 @@ class WindowTests(unittest.TestCase):
 
         self.assertEqual(click.call_args.kwargs["wait_after_seconds"], 0.3)
 
+    def test_hover_locates_moves_and_uses_the_session_settle_seconds(self) -> None:
+        window = Automation(
+            settle_seconds=0.3,
+            focus_before_input=False,
+        ).window(HWND(123))
+        target = Target("button", np.zeros((2, 2, 3), dtype=np.uint8))
+        found = Match("button", 0.99, Rect(2, 3, 4, 5), Point(3, 4))
+
+        with (
+            patch("litewinwrap.window.Window.locate", return_value=found) as locate,
+            patch("litewinwrap.window.mouse.move_to", return_value=1) as move_to,
+            patch("litewinwrap.automation.time.sleep") as sleep,
+        ):
+            self.assertIs(window.hover(target), found)
+
+        locate.assert_called_once_with(
+            target,
+            threshold=None,
+            timeout_seconds=None,
+            overlap=None,
+            retry_on_ambiguity=None,
+        )
+        move_to.assert_called_once_with(found.click)
+        sleep.assert_called_once_with(0.3)
+
+    def test_hover_can_override_focus_and_settling_per_call(self) -> None:
+        window = Automation(
+            settle_seconds=0.3,
+            focus_before_input=True,
+        ).window(HWND(123))
+        target = Target("button", np.zeros((2, 2, 3), dtype=np.uint8))
+        found = Match("button", 0.99, Rect(2, 3, 4, 5), Point(3, 4))
+
+        with (
+            patch("litewinwrap.window.Window.focus") as focus,
+            patch("litewinwrap.window.Window.locate", return_value=found),
+            patch("litewinwrap.window.mouse.move_to", return_value=1),
+            patch("litewinwrap.automation.time.sleep") as sleep,
+        ):
+            window.hover(target, focus=False, settle_seconds=0.0)
+
+        focus.assert_not_called()
+        sleep.assert_not_called()
+
     def test_title_is_queried_on_every_access(self) -> None:
         window = Automation(focus_before_input=False).window(HWND(123))
         with patch(

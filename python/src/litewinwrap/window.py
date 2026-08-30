@@ -4,7 +4,7 @@ import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from . import keyboard, win32
+from . import keyboard, mouse, win32
 from .automation import TextSelector, _describe_selectors, _matches
 from .mouse import Button
 from .types import Capture, HWND, Match, Rect, Target
@@ -224,6 +224,32 @@ class Window:
             timeout_seconds=self.automation._resolve_timeout_seconds(timeout_seconds),
             overlap=self.automation._resolve_overlap(overlap),
         )
+
+    def hover(
+        self,
+        target: Target,
+        *,
+        threshold: float | None = None,
+        timeout_seconds: float | None = None,
+        overlap: float | None = None,
+        retry_on_ambiguity: bool | None = None,
+        focus: bool | None = None,
+        settle_seconds: float | None = None,
+    ) -> Match:
+        """Locate a target, move to its click point, and let the UI settle."""
+
+        if self.automation._resolve_focus(focus) and not self.foreground:
+            self.focus(settle_seconds=0.0)
+        found = self.locate(
+            target,
+            threshold=threshold,
+            timeout_seconds=timeout_seconds,
+            overlap=overlap,
+            retry_on_ambiguity=retry_on_ambiguity,
+        )
+        mouse.move_to(found.click)
+        self.automation._settle(settle_seconds)
+        return found
 
     def click(
         self,

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Literal
 
 from . import win32
@@ -97,6 +99,17 @@ def button_up(button: Button = "left") -> int:
     return win32.send_input([_input(flags, data=data)])
 
 
+@contextmanager
+def hold(button: Button = "left") -> Iterator[None]:
+    """Hold a mouse button for the duration of a ``with`` block."""
+
+    button_down(button)
+    try:
+        yield
+    finally:
+        button_up(button)
+
+
 def click(
     point: Point | tuple[int, int] | None = None,
     *,
@@ -137,7 +150,7 @@ def scroll(notches: int, *, horizontal: bool = False) -> int:
     return win32.send_input([_input(flag, data=notches * WHEEL_DELTA)])
 
 
-def drag(
+def drag_to(
     destination: Point | tuple[int, int],
     *,
     origin: Point | tuple[int, int] | None = None,
@@ -147,6 +160,15 @@ def drag(
     sent += button_down(button)
     try:
         sent += move_to(destination)
+    finally:
+        sent += button_up(button)
+    return sent
+
+
+def drag_by(dx: int, dy: int, *, button: Button = "left") -> int:
+    sent = button_down(button)
+    try:
+        sent += move_by(dx, dy)
     finally:
         sent += button_up(button)
     return sent

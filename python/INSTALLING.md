@@ -17,7 +17,7 @@ py -m build
 The installable artifact is:
 
 ```text
-dist/litewinwrap-0.1.0a1-py3-none-any.whl
+dist/litewinwrap-0.1.0a2-py3-none-any.whl
 ```
 
 The source archive beside it is useful for redistribution or inspection but is
@@ -33,7 +33,7 @@ environment and install it:
 py -m venv C:\Tools\litewinwrap-env
 C:\Tools\litewinwrap-env\Scripts\python -m pip install --upgrade pip
 C:\Tools\litewinwrap-env\Scripts\python -m pip install `
-    C:\Transfer\litewinwrap-0.1.0a1-py3-none-any.whl
+    C:\Transfer\litewinwrap-0.1.0a2-py3-none-any.whl
 ```
 
 `pip` reads the wheel's metadata and downloads its NumPy and OpenCV dependencies
@@ -46,7 +46,7 @@ C:\Tools\litewinwrap-env\Scripts\python -c `
     "import litewinwrap; print(litewinwrap.__version__)"
 ```
 
-The expected output is `0.1.0a1`.
+The expected output is `0.1.0a2`.
 
 ## Install on a VM without internet access
 
@@ -56,7 +56,7 @@ VM, download the package and all dependencies into one directory:
 ```powershell
 New-Item -ItemType Directory -Force wheelhouse
 py -m pip download --dest wheelhouse `
-    .\dist\litewinwrap-0.1.0a1-py3-none-any.whl
+    .\dist\litewinwrap-0.1.0a2-py3-none-any.whl
 ```
 
 Copy the complete `wheelhouse` directory to the VM, then install without using
@@ -67,7 +67,7 @@ py -m venv C:\Tools\litewinwrap-env
 C:\Tools\litewinwrap-env\Scripts\python -m pip install `
     --no-index `
     --find-links C:\Transfer\wheelhouse `
-    litewinwrap==0.1.0a1
+    litewinwrap==0.1.0a2
 ```
 
 Downloading the dependency bundle on matching Windows and Python versions is
@@ -93,10 +93,10 @@ wheel is the more reproducible choice for alpha testing.
 
 ## Updating the VM
 
-Give distinct builds distinct versions, for example `0.1.0a2`, rebuild, copy
+Give distinct builds distinct versions, for example `0.1.0a3`, rebuild, copy
 the new wheel, and run:
 
 ```powershell
 C:\Tools\litewinwrap-env\Scripts\python -m pip install --upgrade `
-    C:\Transfer\litewinwrap-0.1.0a2-py3-none-any.whl
+    C:\Transfer\litewinwrap-0.1.0a3-py3-none-any.whl
 ```
