@@ -9,9 +9,9 @@ from unittest.mock import patch
 import numpy as np
 from PIL import Image
 
-from litewinwrap import Automation, keyboard
+from litewinwrap import Automation, TargetNotFoundError, keyboard
 from litewinwrap.reporting import Reports, _action
-from litewinwrap.types import Capture, HWND, Rect
+from litewinwrap.types import Capture, HWND, Rect, Target
 
 
 class ReportingTests(unittest.TestCase):
@@ -65,6 +65,9 @@ class ReportingTests(unittest.TestCase):
             self.assertIn("Editor &amp; tools", html)
             self.assertNotIn("Rerunning may help", html)
             self.assertNotIn("Likely", html)
+            self.assertNotIn("<h2>Steps</h2>", html)
+            self.assertNotIn("<h2>Environment</h2>", html)
+            self.assertIn("Technical details", html)
             self.assertTrue(
                 any(
                     "litewinwrap report:" in note for note in raised.exception.__notes__
@@ -78,6 +81,49 @@ class ReportingTests(unittest.TestCase):
             self.assertEqual(trace["failure"]["type"], "RuntimeError")
             self.assertEqual(trace["steps"][0]["status"], "failed")
             self.assertEqual(trace["actions"][0]["action"], "Click target")
+
+    def test_missing_target_image_is_prominent_in_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            reports = Reports(temporary_directory)
+            pixels = np.zeros((6, 8, 3), dtype=np.uint8)
+            pixels[:, :] = (20, 120, 240)
+            target = Target("dialog/submit", pixels)
+
+            @reports.test(title="Find the submit button")
+            def failing_test() -> None:
+                raise TargetNotFoundError(
+                    target,
+                    threshold=0.92,
+                    best_score=0.74,
+                    elapsed_seconds=3.0,
+                    attempts=12,
+                    last_capture=self._capture(),
+                )
+
+            with self.assertRaises(TargetNotFoundError):
+                failing_test()
+
+            assert reports.last_report is not None
+            directory = reports.last_report.parent
+            with Image.open(directory / "target.png") as target_image:
+                self.assertEqual(target_image.size, (8, 6))
+            with Image.open(directory / "failure.gif") as animation:
+                self.assertEqual(animation.info["duration"], 200)
+
+            html = reports.last_report.read_text(encoding="utf-8")
+            self.assertIn("Missing target", html)
+            self.assertIn("dialog/submit", html)
+            self.assertIn("src='target.png'", html)
+            trace = json.loads((directory / "trace.json").read_text(encoding="utf-8"))
+            self.assertEqual(
+                trace["target_image"],
+                {
+                    "path": "target.png",
+                    "name": "dialog/submit",
+                    "width": 8,
+                    "height": 6,
+                },
+            )
 
     def test_success_does_not_write_an_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

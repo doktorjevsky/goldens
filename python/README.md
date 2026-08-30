@@ -17,7 +17,7 @@ environment:
 ```powershell
 py -m venv C:\Tools\litewinwrap-env
 C:\Tools\litewinwrap-env\Scripts\python -m pip install `
-    C:\Transfer\litewinwrap-0.1.0a4-py3-none-any.whl
+    C:\Transfer\litewinwrap-0.1.0a5-py3-none-any.whl
 ```
 
 For editable development from this directory:
@@ -260,7 +260,7 @@ from litewinwrap import Reports
 reports = Reports(
     Path("artifacts"),
     max_frames=40,
-    frame_duration_seconds=0.6,
+    frame_duration_seconds=0.2,
 )
 
 
@@ -284,14 +284,19 @@ if __name__ == "__main__":
 
 On failure, the decorator writes one static directory for that test containing
 `index.html`, `trace.json`, `failure.gif`, `failure.png`, and its action-boundary
-frames. It then re-raises the original exception, preserving normal script and
-CI failure behavior. Passing tests write no artifact.
+frames. A visual matching failure also includes `target.png`, the exact target
+that could not be found. It then re-raises the original exception, preserving
+normal script and CI failure behavior. Passing tests write no artifact.
 
-The report contains the supplied test metadata, named steps, recorded actions,
-durations, factual exception fields, environment information, and captured
-window frames. High-level window operations and direct matching, mouse, and
-keyboard primitives are traced automatically. Nested low-level operations are
-retained in the timeline but only the outer action captures a frame.
+The report page leads with the error, missing target, screen at failure, and a
+short action GIF. Traceback and action details are collapsed; the complete
+machine-readable trace remains in `trace.json`. High-level window operations
+and direct matching, mouse, and keyboard primitives are traced automatically.
+Nested low-level operations are retained in the trace but only the outer action
+captures a frame.
+
+GIF frames default to `frame_duration_seconds=0.2` (5 frames per second) and
+are downscaled and palette-compressed to keep artifact sizes reasonable.
 
 Literal text passed to `type_text()` or `write()` is never recorded; reports
 store only its character count. Window screenshots can still contain sensitive

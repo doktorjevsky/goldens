@@ -383,7 +383,7 @@ class Reports:
         retain: Literal["failures"] = "failures",
         capture_frames: bool = True,
         max_frames: int = 40,
-        frame_duration_seconds: float = 0.6,
+        frame_duration_seconds: float = 0.2,
     ) -> None:
         if retain != "failures":
             raise ValueError("The MVP supports retain='failures' only")
@@ -540,6 +540,13 @@ class Reports:
             images_directory=images_directory,
             frame_duration_seconds=self.frame_duration_seconds,
         )
+        try:
+            media["target"] = _write_target(error, directory)
+        except Exception as target_error:
+            media["target"] = None
+            run.capture_errors.append(
+                f"Target image: {type(target_error).__name__}: {target_error}"
+            )
         finished_at = _utc_now()
         trace = {
             "schema_version": 1,
@@ -562,6 +569,7 @@ class Reports:
                 key=lambda item: item["started_seconds"],
             ),
             "frames": media["frames"],
+            "target_image": media["target"],
             "capture_errors": run.capture_errors,
             "environment": {
                 "python": sys.version,
@@ -624,6 +632,27 @@ def _failure_details(error: Exception) -> dict[str, Any]:
     return details
 
 
+def _write_target(error: Exception, directory: Path) -> dict[str, Any] | None:
+    target = getattr(error, "target", None)
+    if not isinstance(target, Target):
+        return None
+    success, encoded = cv2.imencode(
+        ".png",
+        np.ascontiguousarray(target.pixels),
+    )
+    if not success:
+        raise OSError("OpenCV could not encode the target image")
+    filename = "target.png"
+    (directory / filename).write_bytes(encoded.tobytes())
+    height, width = target.pixels.shape[:2]
+    return {
+        "path": filename,
+        "name": target.name,
+        "width": width,
+        "height": height,
+    }
+
+
 def _write_media(
     frames: list[_Frame],
     *,
@@ -634,6 +663,7 @@ def _write_media(
     result: dict[str, Any] = {
         "gif": None,
         "final_image": None,
+        "target": None,
         "frames": [],
     }
     if not frames:
@@ -678,7 +708,7 @@ def _write_media(
             x = int(point[0]) - frame.capture_rect.left
             y = int(point[1]) - frame.capture_rect.top
             draw.ellipse((x - 8, y - 8, x + 8, y + 8), outline=(239, 68, 68), width=4)
-        image.thumbnail((1200, 800), Image.Resampling.LANCZOS)
+        image.thumbnail((960, 640), Image.Resampling.LANCZOS)
         prepared.append(image)
 
     width = max(image.width for image in prepared)
@@ -700,15 +730,24 @@ def _write_media(
 
     final_image = directory / "failure.png"
     rendered[-1].save(final_image, format="PNG")
+    palette = rendered[0].quantize(
+        colors=128,
+        method=Image.Quantize.MEDIANCUT,
+        dither=Image.Dither.NONE,
+    )
+    gif_frames = [
+        image.quantize(palette=palette, dither=Image.Dither.NONE) for image in rendered
+    ]
     gif = directory / "failure.gif"
-    rendered[0].save(
+    gif_frames[0].save(
         gif,
         format="GIF",
         save_all=True,
-        append_images=rendered[1:],
+        append_images=gif_frames[1:],
         duration=max(1, round(frame_duration_seconds * 1000)),
         loop=0,
-        disposal=2,
+        disposal=1,
+        optimize=True,
     )
     result["gif"] = gif.name
     result["final_image"] = final_image.name
@@ -719,80 +758,91 @@ def _render_html(trace: dict[str, Any], media: dict[str, Any]) -> str:
     test = trace["test"]
     failure = trace["failure"]
     step_names = {item["id"]: item["title"] for item in trace["steps"]}
-
-    metadata = [
-        ("Test", test["title"]),
-        ("Owner", test.get("owner")),
-        ("Purpose", test.get("purpose")),
-        ("Duration", f"{trace['duration_seconds']:.3f} seconds"),
-        ("Started", trace["started_at"]),
-    ]
-    if test.get("source_file"):
-        source = test["source_file"]
-        if test.get("source_line"):
-            source = f"{source}:{test['source_line']}"
-        metadata.append(("Source", source))
-
-    failure_facts = [
-        (key.replace("_", " ").title(), value)
-        for key, value in failure.items()
-        if key not in {"traceback", "message", "matches"}
-    ]
-    if failure.get("matches") is not None:
-        failure_facts.append(("Matches", len(failure["matches"])))
-
-    step_rows = (
-        "".join(
-            "<tr>"
-            f"<td>{escape(item['title'])}</td>"
-            f"<td><span class='status {escape(item['status'])}'>{escape(item['status'])}</span></td>"
-            f"<td>{float(item['duration_seconds'] or 0.0):.3f}s</td>"
-            "</tr>"
-            for item in trace["steps"]
-        )
-        or "<tr><td colspan='3' class='muted'>No named steps</td></tr>"
+    failed_step = next(
+        (
+            item["title"]
+            for item in reversed(trace["steps"])
+            if item["status"] == "failed"
+        ),
+        None,
     )
-
-    action_rows = (
-        "".join(
-            "<tr>"
-            f"<td>{float(item['started_seconds']):.3f}s</td>"
-            f"<td>{escape(step_names.get(item.get('step_id'), '—'))}</td>"
-            f"<td style='padding-left:{12 + int(item['depth']) * 18}px'>{escape(item['action'])}</td>"
-            f"<td><span class='status {escape(item['status'])}'>{escape(item['status'])}</span></td>"
-            f"<td>{float(item['duration_seconds']):.3f}s</td>"
-            "<td><details><summary>View</summary>"
-            f"<pre>{escape(json.dumps(item['details'], ensure_ascii=False, indent=2))}</pre>"
-            "</details></td>"
-            "</tr>"
-            for item in trace["actions"]
+    context = [
+        value
+        for value in (
+            f"Step: {failed_step}" if failed_step else None,
+            f"Owner: {test['owner']}" if test.get("owner") else None,
+            f"{trace['duration_seconds']:.2f}s",
         )
-        or "<tr><td colspan='6' class='muted'>No automation actions were recorded</td></tr>"
-    )
+        if value is not None
+    ]
+    context_html = "".join(f"<span>{escape(value)}</span>" for value in context)
 
-    metadata_html = _fact_grid(metadata)
-    failure_html = _fact_grid([("Message", failure["message"]), *failure_facts])
-    environment_html = _fact_grid(list(trace["environment"].items()))
-    visual_html = ""
-    if media.get("gif"):
-        visual_html = (
-            "<section><h2>Sequence</h2>"
-            f"<img class='visual' src='{escape(media['gif'])}' alt='Recorded action sequence'>"
-            "</section>"
+    evidence_items: list[str] = []
+    target_media = media.get("target")
+    if target_media:
+        display_width = min(max(int(target_media["width"]) * 2, 96), 480)
+        target_label = (
+            "Missing target" if failure["type"] == "TargetNotFoundError" else "Target"
         )
-    final_html = ""
+        evidence_items.append(
+            "<figure><figcaption>"
+            f"{target_label}<strong>{escape(target_media['name'])}</strong>"
+            "</figcaption><div class='target-stage'>"
+            f"<img class='target' src='{escape(target_media['path'])}' "
+            f"style='width:{display_width}px' alt='Target that was not found'>"
+            "</div></figure>"
+        )
     if media.get("final_image"):
-        final_html = (
-            "<section><h2>Final frame</h2>"
-            f"<img class='visual' src='{escape(media['final_image'])}' alt='Final captured frame'>"
-            "</section>"
+        final_label = "Screen when matching failed" if target_media else "Final frame"
+        evidence_items.append(
+            "<figure><figcaption>"
+            f"{final_label}"
+            "</figcaption>"
+            f"<img class='visual' src='{escape(media['final_image'])}' "
+            "alt='Screen captured when the test failed'></figure>"
         )
+    evidence_html = ""
+    if evidence_items:
+        evidence_html = (
+            "<section><div class='evidence'>"
+            + "".join(evidence_items)
+            + "</div></section>"
+        )
+
+    sequence_html = ""
+    if media.get("gif"):
+        sequence_html = (
+            "<section><h2>What happened</h2>"
+            f"<img class='visual' src='{escape(media['gif'])}' "
+            "alt='Recorded action sequence'></section>"
+        )
+
+    action_items = "".join(
+        "<li>"
+        f"<span>{escape(step_names.get(item.get('step_id'), item['action']))}</span>"
+        f"<strong>{escape(item['action'])}</strong>"
+        f"<small>{float(item['started_seconds']):.2f}s · {escape(item['status'])}</small>"
+        "</li>"
+        for item in trace["actions"]
+        if int(item["depth"]) == 0
+    )
+    source = test.get("source_file")
+    if source and test.get("source_line"):
+        source = f"{source}:{test['source_line']}"
+    technical_facts = _fact_grid(
+        [
+            ("Exception", failure["type"]),
+            ("Source", source),
+            ("Purpose", test.get("purpose")),
+            ("Started", trace["started_at"]),
+        ]
+    )
     capture_errors = ""
     if trace["capture_errors"]:
         capture_errors = (
-            "<details><summary>Capture errors</summary><pre>"
+            "<h3>Capture errors</h3><pre>"
             + escape("\n".join(trace["capture_errors"]))
-            + "</pre></details>"
+            + "</pre>"
         )
 
     return f"""<!doctype html>
@@ -803,30 +853,30 @@ def _render_html(trace: dict[str, Any], media: dict[str, Any]) -> str:
 <title>{escape(test["title"])} — failed</title>
 <style>
 :root {{ color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }}
-body {{ margin: 0; background: #f5f7fb; color: #172033; }}
-main {{ max-width: 1120px; margin: 0 auto; padding: 36px 24px 72px; }}
-header, section {{ background: white; border: 1px solid #dbe2ea; border-radius: 12px; padding: 22px; margin-bottom: 18px; box-shadow: 0 2px 8px #1720330d; }}
-h1 {{ margin: 8px 0 20px; font-size: 28px; }} h2 {{ margin-top: 0; font-size: 18px; }}
+body {{ margin: 0; background: #f4f5f7; color: #172033; }}
+main {{ max-width: 960px; margin: 0 auto; padding: 32px 20px 64px; }}
+header, section, details.technical {{ background: white; border: 1px solid #dbe2ea; border-radius: 10px; padding: 20px; margin-bottom: 14px; }}
+h1 {{ margin: 8px 0 10px; font-size: 26px; }} h2 {{ margin: 0 0 14px; font-size: 17px; }} h3 {{ font-size: 14px; }}
 .badge {{ display: inline-block; color: #991b1b; background: #fee2e2; border-radius: 999px; padding: 5px 10px; font-weight: 700; font-size: 12px; letter-spacing: .05em; }}
+.message {{ margin: 0; font-size: 16px; line-height: 1.5; }}
+.context {{ display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 14px 0 0; color: #64748b; font-size: 13px; }}
+.evidence {{ display: grid; grid-template-columns: minmax(180px, 1fr) minmax(0, 2fr); gap: 18px; align-items: start; }}
+figure {{ margin: 0; min-width: 0; }} figcaption {{ margin-bottom: 10px; color: #475569; font-size: 13px; }} figcaption strong {{ display: block; margin-top: 3px; color: #172033; overflow-wrap: anywhere; }}
+.target-stage {{ display: grid; min-height: 160px; place-items: center; padding: 18px; background: #eef1f5; border: 1px solid #cbd5e1; border-radius: 7px; overflow: hidden; }}
+.target {{ display: block; max-width: 100%; height: auto; image-rendering: pixelated; }}
 .facts {{ display: grid; grid-template-columns: minmax(120px, 180px) 1fr; gap: 8px 18px; }}
 .facts dt {{ color: #64748b; font-weight: 600; }} .facts dd {{ margin: 0; overflow-wrap: anywhere; }}
-.visual {{ display: block; max-width: 100%; height: auto; border: 1px solid #cbd5e1; border-radius: 8px; }}
-table {{ width: 100%; border-collapse: collapse; font-size: 14px; }}
-th, td {{ padding: 10px 12px; text-align: left; border-bottom: 1px solid #e2e8f0; vertical-align: top; }}
-th {{ color: #475569; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }}
-.status {{ font-weight: 700; }} .status.failed {{ color: #b91c1c; }} .status.passed {{ color: #047857; }}
-.muted {{ color: #64748b; }} pre {{ white-space: pre-wrap; overflow-wrap: anywhere; background: #0f172a; color: #e2e8f0; border-radius: 8px; padding: 14px; overflow: auto; }}
+.visual {{ display: block; width: 100%; height: auto; border: 1px solid #cbd5e1; border-radius: 7px; }}
+.actions {{ margin: 18px 0; padding-left: 24px; }} .actions li {{ padding: 5px 0; }} .actions span, .actions strong, .actions small {{ display: block; }} .actions span, .actions small {{ color: #64748b; }}
+pre {{ white-space: pre-wrap; overflow-wrap: anywhere; background: #0f172a; color: #e2e8f0; border-radius: 7px; padding: 14px; overflow: auto; }}
 summary {{ cursor: pointer; color: #334155; font-weight: 600; }}
+@media (max-width: 680px) {{ .evidence {{ grid-template-columns: 1fr; }} }}
 </style>
 </head>
 <body><main>
-<header><span class="badge">FAILED</span><h1>{escape(test["title"])}</h1>{metadata_html}</header>
-<section><h2>Failure</h2>{failure_html}</section>
-{visual_html}{final_html}
-<section><h2>Steps</h2><table><thead><tr><th>Step</th><th>Status</th><th>Duration</th></tr></thead><tbody>{step_rows}</tbody></table></section>
-<section><h2>Actions</h2><table><thead><tr><th>Time</th><th>Step</th><th>Action</th><th>Status</th><th>Duration</th><th>Data</th></tr></thead><tbody>{action_rows}</tbody></table></section>
-<section><h2>Environment</h2>{environment_html}</section>
-<section><details><summary>Traceback</summary><pre>{escape(failure["traceback"])}</pre></details>{capture_errors}</section>
+<header><span class="badge">FAILED</span><h1>{escape(test["title"])}</h1><p class="message"><strong>{escape(failure["type"])}</strong>: {escape(failure["message"])}</p><p class="context">{context_html}</p></header>
+{evidence_html}{sequence_html}
+<details class="technical"><summary>Technical details</summary>{technical_facts}<h2>Actions</h2><ol class="actions">{action_items}</ol><h2>Traceback</h2><pre>{escape(failure["traceback"])}</pre>{capture_errors}</details>
 </main></body></html>"""
 
 
