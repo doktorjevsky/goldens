@@ -29,6 +29,7 @@ from .types import Capture, HWND, Match, Point, Rect, Target
 
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
+_FALLBACK_GIF_FRAME_DURATION_SECONDS = 0.5
 
 _CURRENT_RUN: ContextVar[_Run | None] = ContextVar(
     "litewinwrap_current_report_run",
@@ -67,6 +68,17 @@ def _json_value(value: Any) -> Any:
     if isinstance(value, (list, tuple, set)):
         return [_json_value(item) for item in value]
     return repr(value)
+
+
+def _script_json(value: Any) -> str:
+    return (
+        json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+        .replace("&", "\\u0026")
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("\u2028", "\\u2028")
+        .replace("\u2029", "\\u2029")
+    )
 
 
 def _point_value(point: Point | tuple[int, int] | None) -> list[int] | None:
@@ -531,7 +543,6 @@ class Reports:
         capture_frames: bool = True,
         max_frames: int = 40,
         recording_interval_seconds: float = 0.2,
-        playback_frame_duration_seconds: float = 0.5,
     ) -> None:
         if retain != "failures":
             raise ValueError("The MVP supports retain='failures' only")
@@ -546,19 +557,11 @@ class Reports:
             raise ValueError(
                 "recording_interval_seconds must be a finite positive number"
             )
-        if (
-            not isfinite(playback_frame_duration_seconds)
-            or playback_frame_duration_seconds <= 0.0
-        ):
-            raise ValueError(
-                "playback_frame_duration_seconds must be a finite positive number"
-            )
         self.artifact_directory = Path(artifact_directory)
         self.retain = retain
         self.capture_frames = capture_frames
         self.max_frames = max_frames
         self.recording_interval_seconds = float(recording_interval_seconds)
-        self.playback_frame_duration_seconds = float(playback_frame_duration_seconds)
         self.last_report: Path | None = None
 
     def test(
@@ -708,7 +711,6 @@ class Reports:
             run.frames,
             directory=directory,
             images_directory=images_directory,
-            playback_frame_duration_seconds=self.playback_frame_duration_seconds,
         )
         try:
             media["target"] = _write_target(error, directory)
@@ -828,7 +830,6 @@ def _write_media(
     *,
     directory: Path,
     images_directory: Path,
-    playback_frame_duration_seconds: float,
 ) -> dict[str, Any]:
     result: dict[str, Any] = {
         "gif": None,
@@ -930,7 +931,7 @@ def _write_media(
         format="GIF",
         save_all=True,
         append_images=gif_frames[1:],
-        duration=max(1, round(playback_frame_duration_seconds * 1000)),
+        duration=max(1, round(_FALLBACK_GIF_FRAME_DURATION_SECONDS * 1000)),
         loop=0,
         disposal=1,
         optimize=True,
@@ -1000,13 +1001,49 @@ def _render_html(trace: dict[str, Any], media: dict[str, Any]) -> str:
         )
 
     sequence_html = ""
-    if media.get("gif"):
+    player_script = ""
+    if media.get("frames"):
+        frames = media["frames"]
+        first_frame = frames[0]
+        first_label = (
+            f"{first_frame['step']} · {first_frame['action']}"
+            if first_frame.get("step")
+            else first_frame["action"]
+        )
+        disabled = " disabled" if len(frames) == 1 else ""
+        sequence_html = (
+            "<section class='sequence'>"
+            "<div class='section-heading'><h2>What happened</h2>"
+            f"<a href='{escape(media['gif'])}' target='_blank' rel='noopener'>"
+            "GIF file</a></div>"
+            f"<a id='sequence-link' class='media-link' href='{escape(first_frame['path'])}' "
+            "target='_blank' rel='noopener' title='Open current frame full size'>"
+            f"<img id='sequence-image' class='visual' src='{escape(first_frame['path'])}' "
+            f"alt='Recorded frame 1 of {len(frames)}'></a>"
+            "<div class='player-controls'>"
+            f"<button id='previous-frame' type='button'{disabled}>Previous</button>"
+            f"<button id='toggle-playback' type='button'{disabled}>Pause</button>"
+            f"<button id='next-frame' type='button'{disabled}>Next</button>"
+            f"<input id='frame-slider' type='range' min='0' max='{len(frames) - 1}' "
+            f"value='0' aria-label='Current frame'{disabled}>"
+            f"<output id='frame-position'>1 / {len(frames)}</output>"
+            "<label>Speed <select id='playback-speed'>"
+            "<option value='0.25'>0.25×</option>"
+            "<option value='0.5'>0.5×</option>"
+            "<option value='1' selected>1×</option>"
+            "<option value='1.5'>1.5×</option>"
+            "<option value='2'>2×</option>"
+            "</select></label></div>"
+            f"<p id='sequence-label' class='frame-label'>{escape(first_label)}</p>"
+            f"<noscript><img class='visual' src='{escape(media['gif'])}' "
+            "alt='Recorded action sequence'></noscript></section>"
+        )
+        player_script = _render_player_script(frames)
+    elif media.get("gif"):
         sequence_html = (
             "<section class='sequence'><h2>What happened</h2>"
-            f"<a class='media-link' href='{escape(media['gif'])}' "
-            "target='_blank' rel='noopener' title='Open full-size animation'>"
             f"<img class='visual' src='{escape(media['gif'])}' "
-            "alt='Recorded action sequence'></a></section>"
+            "alt='Recorded action sequence'></section>"
         )
 
     action_items = "".join(
@@ -1061,18 +1098,103 @@ figure {{ margin: 0; min-width: 0; }} figcaption {{ margin-bottom: 10px; color: 
 .media-link {{ display: block; color: inherit; }} .target-link {{ display: grid; place-items: center; max-width: 100%; }}
 .visual {{ display: block; max-width: 100%; height: auto; border: 1px solid #cbd5e1; border-radius: 7px; object-fit: contain; }}
 .evidence .visual {{ width: auto; max-height: 280px; margin: 0 auto; }}
+.section-heading {{ display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }} .section-heading a {{ color: #475569; font-size: 13px; }}
 .sequence .media-link {{ display: flex; justify-content: center; }} .sequence .visual {{ width: auto; max-height: min(48vh, 380px); }}
+.player-controls {{ display: grid; grid-template-columns: auto auto auto minmax(100px, 1fr) auto auto; align-items: center; gap: 8px; margin-top: 12px; }}
+.player-controls button, .player-controls select {{ min-height: 32px; border: 1px solid #cbd5e1; border-radius: 6px; background: white; color: #172033; }} .player-controls button {{ padding: 4px 10px; cursor: pointer; }} .player-controls button:disabled {{ cursor: default; opacity: .45; }}
+.player-controls input {{ width: 100%; }} .player-controls output, .player-controls label {{ color: #475569; font-size: 13px; white-space: nowrap; }}
+.frame-label {{ min-height: 1.3em; margin: 8px 0 0; color: #64748b; font-size: 13px; text-align: center; }}
 .actions {{ margin: 18px 0; padding-left: 24px; }} .actions li {{ padding: 5px 0; }} .actions span, .actions strong, .actions small {{ display: block; }} .actions span, .actions small {{ color: #64748b; }}
 pre {{ white-space: pre-wrap; overflow-wrap: anywhere; background: #0f172a; color: #e2e8f0; border-radius: 7px; padding: 14px; overflow: auto; }}
 summary {{ cursor: pointer; color: #334155; font-weight: 600; }}
-@media (max-width: 680px) {{ .evidence {{ grid-template-columns: 1fr; }} }}
+@media (max-width: 680px) {{ .evidence {{ grid-template-columns: 1fr; }} .player-controls {{ grid-template-columns: repeat(3, 1fr); }} .player-controls input {{ grid-column: 1 / 3; }} }}
 </style>
 </head>
 <body><main>
 <header><span class="badge">FAILED</span><h1>{escape(test["title"])}</h1><p class="message"><strong>{escape(failure["type"])}</strong>: {escape(failure["message"])}</p><p class="context">{context_html}</p></header>
 {evidence_html}{sequence_html}
 <details class="technical"><summary>Technical details</summary>{technical_facts}<h2>Actions</h2><ol class="actions">{action_items}</ol><h2>Traceback</h2><pre>{escape(failure["traceback"])}</pre>{capture_errors}</details>
-</main></body></html>"""
+</main>{player_script}</body></html>"""
+
+
+def _render_player_script(
+    frames: list[dict[str, Any]],
+) -> str:
+    default_frame_duration_milliseconds = round(
+        _FALLBACK_GIF_FRAME_DURATION_SECONDS * 1000
+    )
+    return f"""<script>
+(() => {{
+  const frames = {_script_json(frames)};
+  const defaultFrameDurationMilliseconds = {default_frame_duration_milliseconds};
+  const image = document.getElementById("sequence-image");
+  const link = document.getElementById("sequence-link");
+  const label = document.getElementById("sequence-label");
+  const slider = document.getElementById("frame-slider");
+  const position = document.getElementById("frame-position");
+  const toggle = document.getElementById("toggle-playback");
+  const speedSelect = document.getElementById("playback-speed");
+  let frameIndex = 0;
+  let speed = 1;
+  let playing = frames.length > 1;
+  let timer = null;
+
+  for (const frame of frames) {{
+    const preload = new Image();
+    preload.src = frame.path;
+  }}
+
+  function render() {{
+    const frame = frames[frameIndex];
+    image.src = frame.path;
+    image.alt = `Recorded frame ${{frameIndex + 1}} of ${{frames.length}}`;
+    link.href = frame.path;
+    slider.value = String(frameIndex);
+    position.textContent = `${{frameIndex + 1}} / ${{frames.length}}`;
+    label.textContent = frame.step
+      ? `${{frame.step}} · ${{frame.action}}`
+      : frame.action;
+  }}
+
+  function schedule() {{
+    window.clearTimeout(timer);
+    if (!playing) return;
+    timer = window.setTimeout(() => {{
+      frameIndex = (frameIndex + 1) % frames.length;
+      render();
+      schedule();
+    }}, defaultFrameDurationMilliseconds / speed);
+  }}
+
+  function show(frame) {{
+    frameIndex = (frame + frames.length) % frames.length;
+    render();
+    schedule();
+  }}
+
+  document.getElementById("previous-frame").addEventListener("click", () => {{
+    show(frameIndex - 1);
+  }});
+  document.getElementById("next-frame").addEventListener("click", () => {{
+    show(frameIndex + 1);
+  }});
+  toggle.addEventListener("click", () => {{
+    playing = !playing;
+    toggle.textContent = playing ? "Pause" : "Play";
+    schedule();
+  }});
+  slider.addEventListener("input", () => {{
+    show(Number(slider.value));
+  }});
+  speedSelect.addEventListener("change", () => {{
+    speed = Number(speedSelect.value);
+    schedule();
+  }});
+
+  render();
+  schedule();
+}})();
+</script>"""
 
 
 def _fact_grid(items: list[tuple[str, Any]]) -> str:

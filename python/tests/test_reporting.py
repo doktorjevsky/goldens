@@ -23,10 +23,7 @@ class ReportingTests(unittest.TestCase):
 
     def test_failure_writes_one_static_report_for_the_test(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
-            reports = Reports(
-                temporary_directory,
-                playback_frame_duration_seconds=0.1,
-            )
+            reports = Reports(temporary_directory)
 
             @reports.test(
                 title="Save <document>",
@@ -34,7 +31,7 @@ class ReportingTests(unittest.TestCase):
                 purpose="Exercise the save workflow",
             )
             def failing_test() -> None:
-                with reports.step("Click Save"):
+                with reports.step("Click </script><Save>"):
                     with _action(
                         "Click target",
                         hwnd=HWND(7),
@@ -70,6 +67,12 @@ class ReportingTests(unittest.TestCase):
             self.assertNotIn("<h2>Environment</h2>", html)
             self.assertIn("Technical details", html)
             self.assertIn("max-height: min(48vh, 380px)", html)
+            self.assertIn("id='playback-speed'", html)
+            self.assertIn("id='frame-slider'", html)
+            self.assertIn("0.25×", html)
+            self.assertIn("GIF file", html)
+            self.assertIn("Click \\u003c/script\\u003e\\u003cSave\\u003e", html)
+            self.assertEqual(html.count("</script>"), 1)
             self.assertTrue(
                 any(
                     "litewinwrap report:" in note for note in raised.exception.__notes__
@@ -133,7 +136,6 @@ class ReportingTests(unittest.TestCase):
                 temporary_directory,
                 max_frames=20,
                 recording_interval_seconds=0.01,
-                playback_frame_duration_seconds=0.4,
             )
             capture_count = 0
 
@@ -173,7 +175,7 @@ class ReportingTests(unittest.TestCase):
                     total_duration_milliseconds += animation.info["duration"]
                 self.assertEqual(
                     total_duration_milliseconds,
-                    len(trace["frames"]) * 400,
+                    len(trace["frames"]) * 500,
                 )
 
     def test_report_capture_lock_is_reentrant_for_normal_window_capture(self) -> None:
@@ -306,8 +308,6 @@ class ReportingTests(unittest.TestCase):
             {"max_frames": 0},
             {"recording_interval_seconds": 0.0},
             {"recording_interval_seconds": float("nan")},
-            {"playback_frame_duration_seconds": 0.0},
-            {"playback_frame_duration_seconds": float("nan")},
         ):
             with self.subTest(values=values):
                 with self.assertRaises(ValueError):
