@@ -8,6 +8,24 @@ from litewinwrap.types import Point
 
 
 class MouseTests(unittest.TestCase):
+    def test_invalid_click_intervals_are_rejected_before_moving_or_clicking(self) -> None:
+        invalid = (-0.1, float("inf"), float("nan"))
+        with (
+            patch("litewinwrap.mouse.move_to") as move_to,
+            patch("litewinwrap.mouse.win32.send_input") as send,
+        ):
+            for interval_seconds in invalid:
+                with self.subTest(value=interval_seconds):
+                    with self.assertRaisesRegex(ValueError, "interval_seconds"):
+                        mouse.click(
+                            (10, 20),
+                            count=2,
+                            interval_seconds=interval_seconds,
+                        )
+
+        move_to.assert_not_called()
+        send.assert_not_called()
+
     def test_hold_releases_the_button_when_the_body_raises(self) -> None:
         events: list[tuple[str, str]] = []
 

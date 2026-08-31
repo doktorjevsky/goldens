@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
+from math import isfinite
 from typing import TypeAlias
 
 from . import reporting, win32
@@ -197,6 +198,11 @@ def _unicode_input(unit: int, flags: int = 0) -> win32.INPUT:
     return value
 
 
+def _validate_interval_seconds(interval_seconds: float) -> None:
+    if not isfinite(interval_seconds) or interval_seconds < 0:
+        raise ValueError("interval_seconds must be a finite non-negative number")
+
+
 @reporting._trace("Key down")
 def down(key: Key) -> int:
     """Hold one named key down until a corresponding ``up`` call."""
@@ -244,6 +250,7 @@ def press(*keys: Key, count: int = 1, interval_seconds: float = 0.0) -> int:
         raise ValueError("At least one key is required")
     if count <= 0:
         raise ValueError("Press count must be positive")
+    _validate_interval_seconds(interval_seconds)
     codes = tuple(_key_code(key) for key in keys)
     sent = 0
     for index in range(count):
@@ -272,6 +279,7 @@ def write(
 ) -> int:
     if chunk_size <= 0:
         raise ValueError("Chunk size must be positive")
+    _validate_interval_seconds(interval_seconds)
 
     encoded = text.encode("utf-16-le")
     units = [

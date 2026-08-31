@@ -7,7 +7,6 @@ import numpy as np
 
 from litewinwrap import Automation
 from litewinwrap.types import Capture, HWND, Match, Point, Rect, Target
-from litewinwrap.window import Window
 
 
 class WindowTests(unittest.TestCase):

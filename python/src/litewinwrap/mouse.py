@@ -69,6 +69,11 @@ def _validate_duration_seconds(duration_seconds: float) -> None:
         raise ValueError("Movement duration must be a finite non-negative number")
 
 
+def _validate_interval_seconds(interval_seconds: float) -> None:
+    if not math.isfinite(interval_seconds) or interval_seconds < 0:
+        raise ValueError("interval_seconds must be a finite non-negative number")
+
+
 def _absolute_move_input(
     point: Point | tuple[int, int],
     *,
@@ -184,11 +189,13 @@ def click(
 ) -> int:
     if count <= 0:
         raise ValueError("Click count must be positive")
+    if interval_seconds is None:
+        interval_seconds = win32.get_double_click_seconds() * 0.5
+    _validate_interval_seconds(interval_seconds)
+
     sent = move_to(point) if point is not None else 0
     down_flags, down_data = _DOWN[button]
     up_flags, up_data = _UP[button]
-    if interval_seconds is None:
-        interval_seconds = win32.get_double_click_seconds() * 0.5
 
     for index in range(count):
         sent += win32.send_input(
@@ -198,7 +205,7 @@ def click(
             ]
         )
         if index + 1 < count:
-            time.sleep(max(0.0, interval_seconds))
+            time.sleep(interval_seconds)
     return sent
 
 
