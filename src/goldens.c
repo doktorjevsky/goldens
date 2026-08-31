@@ -1761,7 +1761,8 @@ static void clear_active_resource(const wchar_t *parent) {
 }
 
 static void create_folder(void) {
-    const wchar_t *directory = selected_directory_path();
+    const wchar_t *directory = golden_resource_tree_destination_directory(
+        g.tree, g.root[0] ? g.root : NULL);
     if (!directory || !directory[0]) {
         show_error(L"Open a resource folder before creating a subfolder.");
         return;
