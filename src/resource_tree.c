@@ -21,3 +21,9 @@ const wchar_t *golden_resource_tree_selected_directory(HWND tree) {
     node = node_data(tree, item);
     return node && node->kind == RESOURCE_DIRECTORY ? node->path : NULL;
 }
+
+const wchar_t *golden_resource_tree_destination_directory(
+    HWND tree, const wchar_t *default_directory) {
+    const wchar_t *selected = golden_resource_tree_selected_directory(tree);
+    return selected && selected[0] ? selected : default_directory;
+}

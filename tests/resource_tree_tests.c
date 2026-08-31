@@ -50,6 +50,8 @@ int main(void) {
         golden_resource_tree_selected_directory(tree) != NULL;
     TreeView_SelectItem(tree, root_item);
     failed |= golden_resource_tree_selected_directory(tree) != root_path;
+    failed |= golden_resource_tree_destination_directory(
+        tree, L"C:\\fallback") != root_path;
     TreeView_SelectItem(tree, png_item);
     failed |= golden_resource_tree_selected_directory(tree) != root_path;
     TreeView_SelectItem(tree, annotation_item);
@@ -58,6 +60,8 @@ int main(void) {
     /* Regression: clearing selection must not retain the previous directory. */
     TreeView_SelectItem(tree, NULL);
     failed |= golden_resource_tree_selected_directory(tree) != NULL;
+    failed |= golden_resource_tree_destination_directory(tree, root_path) !=
+              root_path;
 
     DestroyWindow(tree);
     DestroyWindow(parent);
