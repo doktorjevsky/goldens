@@ -3,6 +3,7 @@
 #include <commctrl.h>
 #include <shellapi.h>
 #include <shlobj.h>
+#include <shobjidl.h>
 #include <shlwapi.h>
 #include <wincodec.h>
 #include <limits.h>
@@ -122,6 +123,7 @@ typedef struct {
 
     BOOL rebuilding_resources;
     wchar_t pending_resource_selection[MAX_PATH * 4];
+    BOOL pending_resource_rename;
     GoldenResourceWatcher resource_watcher;
     BOOL resource_watcher_needs_restart;
     BOOL resource_refresh_pending;
@@ -1099,46 +1101,79 @@ static void initialize_startup_root(void) {
     }
 }
 
-static int CALLBACK browse_callback(HWND hwnd, UINT msg, LPARAM lp, LPARAM data) {
-    if (msg == BFFM_INITIALIZED && g.root[0])
-        SendMessageW(hwnd, BFFM_SETSELECTIONW, TRUE, (LPARAM)g.root);
-    return 0;
-}
-
 static void open_folder(void) {
     if (!maybe_save()) return;
-    BROWSEINFOW bi = {0};
-    bi.hwndOwner = g.main;
-    bi.lpszTitle = L"Choose a golden resources folder";
-    bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
-    bi.lpfn = browse_callback;
-    PIDLIST_ABSOLUTE id = SHBrowseForFolderW(&bi);
-    if (!id) return;
-    wchar_t path[MAX_PATH * 4];
-    if (SHGetPathFromIDListW(id, path)) {
+    IFileOpenDialog *dialog = NULL;
+    HRESULT result = CoCreateInstance(&CLSID_FileOpenDialog, NULL,
+                                      CLSCTX_INPROC_SERVER,
+                                      &IID_IFileOpenDialog,
+                                      (void **)&dialog);
+    if (FAILED(result)) {
+        show_error(L"Could not open the folder picker.");
+        return;
+    }
+
+    DWORD options = 0;
+    result = IFileOpenDialog_GetOptions(dialog, &options);
+    if (SUCCEEDED(result))
+        result = IFileOpenDialog_SetOptions(
+            dialog, options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM |
+                        FOS_PATHMUSTEXIST | FOS_NOCHANGEDIR);
+    if (SUCCEEDED(result))
+        result = IFileOpenDialog_SetTitle(
+            dialog, L"Choose a golden resources folder");
+
+    IShellItem *initial_folder = NULL;
+    if (SUCCEEDED(result) && g.root[0] &&
+        SUCCEEDED(SHCreateItemFromParsingName(
+            g.root, NULL, &IID_IShellItem, (void **)&initial_folder))) {
+        IFileOpenDialog_SetFolder(dialog, initial_folder);
+        IShellItem_Release(initial_folder);
+    }
+
+    if (SUCCEEDED(result)) result = IFileOpenDialog_Show(dialog, g.main);
+    if (result == HRESULT_FROM_WIN32(ERROR_CANCELLED)) {
+        IFileOpenDialog_Release(dialog);
+        return;
+    }
+    if (FAILED(result)) {
+        IFileOpenDialog_Release(dialog);
+        show_error(L"Could not open the folder picker.");
+        return;
+    }
+
+    IShellItem *selection = NULL;
+    PWSTR path = NULL;
+    result = IFileOpenDialog_GetResult(dialog, &selection);
+    if (SUCCEEDED(result))
+        result = IShellItem_GetDisplayName(selection, SIGDN_FILESYSPATH, &path);
+    if (SUCCEEDED(result) && path) {
         if (!golden_path_copy(path, g.root, _countof(g.root)) ||
             !golden_path_copy(path, g.current_dir,
                               _countof(g.current_dir))) {
             show_error(L"The selected folder path is too long.");
-            CoTaskMemFree(id);
-            return;
+        } else {
+            clear_image();
+            g.image_path[0] = 0;
+            g.selected = -1;
+            g.annotation_count = g.saved_annotation_count = 0;
+            g.dirty = FALSE;
+            golden_history_clear(&g.history);
+            update_tool_availability();
+            remember_root();
+            restart_resource_watcher();
+            refresh_resources();
+            update_status();
+            SetWindowTextW(g.main, APP_NAME);
+            update_context_label();
+            InvalidateRect(g.editor, NULL, FALSE);
         }
-        clear_image();
-        g.image_path[0] = 0;
-        g.selected = -1;
-        g.annotation_count = g.saved_annotation_count = 0;
-        g.dirty = FALSE;
-        golden_history_clear(&g.history);
-        update_tool_availability();
-        remember_root();
-        restart_resource_watcher();
-        refresh_resources();
-        update_status();
-        SetWindowTextW(g.main, APP_NAME);
-        update_context_label();
-        InvalidateRect(g.editor, NULL, FALSE);
+    } else {
+        show_error(L"Could not use the selected folder.");
     }
-    CoTaskMemFree(id);
+    if (path) CoTaskMemFree(path);
+    if (selection) IShellItem_Release(selection);
+    IFileOpenDialog_Release(dialog);
 }
 
 static BOOL load_resource(const wchar_t *path) {
@@ -1729,10 +1764,14 @@ static BOOL child_path(const wchar_t *directory, const wchar_t *name,
     return golden_path_join(directory, name, path, capacity);
 }
 
-static void select_resource_after_refresh(const wchar_t *path) {
+static BOOL select_resource_after_refresh(const wchar_t *path) {
     if (!golden_path_copy(path, g.pending_resource_selection,
-                          _countof(g.pending_resource_selection))) return;
-    PostMessageW(g.main, WM_RESOURCES_CHANGED, 0, 0);
+                          _countof(g.pending_resource_selection))) return FALSE;
+    if (!PostMessageW(g.main, WM_RESOURCES_CHANGED, 0, 0)) {
+        g.pending_resource_selection[0] = 0;
+        return FALSE;
+    }
+    return TRUE;
 }
 
 static void update_title_for_active_resource(void) {
@@ -1762,31 +1801,37 @@ static void clear_active_resource(const wchar_t *parent) {
 
 static void create_folder(void) {
     const wchar_t *directory = selected_directory_path();
+    if ((!directory || !directory[0]) && g.root[0]) directory = g.root;
     if (!directory || !directory[0]) {
-        show_error(L"Open a resource folder before creating a subfolder.");
+        show_error(L"Open a resource folder before creating a folder.");
         return;
     }
-    wchar_t name[256] = L"New Folder";
-    if (!prompt_text(g.main, L"New folder", L"Folder name:",
-                     name, _countof(name))) return;
-    trim_text(name);
-    if (!valid_resource_name(name)) {
-        show_error(L"Enter a valid Windows folder name.");
-        return;
+    wchar_t name[256], path[MAX_PATH * 4];
+    BOOL created = FALSE;
+    BOOL path_too_long = FALSE;
+    for (int index = 1; index <= 10000; ++index) {
+        if (index == 1)
+            wcscpy(name, L"New Folder");
+        else
+            _snwprintf(name, _countof(name), L"New Folder (%d)", index);
+        if (!child_path(directory, name, path, _countof(path))) {
+            path_too_long = TRUE;
+            break;
+        }
+        if (CreateDirectoryW(path, NULL)) {
+            created = TRUE;
+            break;
+        }
+        DWORD error = GetLastError();
+        if (error != ERROR_ALREADY_EXISTS && error != ERROR_FILE_EXISTS) break;
     }
-    wchar_t path[MAX_PATH * 4];
-    if (!child_path(directory, name, path, _countof(path))) {
-        show_error(L"The folder path is too long.");
-        return;
-    }
-    if (!CreateDirectoryW(path, NULL)) {
-        show_error(GetLastError() == ERROR_ALREADY_EXISTS ?
-            L"A file or folder with that name already exists here." :
-            L"Windows could not create the folder.");
+    if (!created) {
+        show_error(path_too_long ? L"The folder path is too long." :
+                                  L"Windows could not create the folder.");
         return;
     }
     push_resource_undo(GOLDEN_HISTORY_CREATE_DIRECTORY, NULL, path);
-    select_resource_after_refresh(path);
+    if (select_resource_after_refresh(path)) g.pending_resource_rename = TRUE;
 }
 
 static const wchar_t *resource_pair_error(GoldenResourceRenameResult result) {
@@ -2990,7 +3035,7 @@ static HMENU create_main_menu(void) {
     HMENU view = CreatePopupMenu();
     HMENU capture = CreatePopupMenu();
     AppendMenuW(file, MF_STRING, ID_OPEN, L"Open Folder…\tCtrl+O");
-    AppendMenuW(file, MF_STRING, ID_NEW_FOLDER, L"New Folder…\tCtrl+N");
+    AppendMenuW(file, MF_STRING, ID_NEW_FOLDER, L"New Folder\tCtrl+N");
     AppendMenuW(file, MF_SEPARATOR, 0, NULL);
     AppendMenuW(file, MF_STRING, ID_SAVE, L"Save Annotations\tCtrl+S");
     AppendMenuW(file, MF_SEPARATOR, 0, NULL);
@@ -3237,6 +3282,7 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     case WM_RESOURCES_CHANGED: {
         refresh_resources();
+        HTREEITEM rename_item = NULL;
         if (g.pending_resource_selection[0]) {
             HTREEITEM item = find_resource_item(TreeView_GetRoot(g.tree),
                                                 g.pending_resource_selection);
@@ -3249,9 +3295,13 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             g.rebuilding_resources = FALSE;
             if (selected_node && selected_node->kind == RESOURCE_DIRECTORY)
                 activate_resource_node(selected_node);
+            if (item && g.pending_resource_rename) rename_item = item;
             g.pending_resource_selection[0] = 0;
         }
+        g.pending_resource_rename = FALSE;
         update_tool_availability();
+        if (rename_item)
+            PostMessageW(g.main, WM_BEGIN_TREE_RENAME, 0, (LPARAM)rename_item);
         return 0;
     }
     case WM_ANNOTATION_RENAMED:
