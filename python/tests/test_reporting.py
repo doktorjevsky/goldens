@@ -31,6 +31,19 @@ class ReportingTests(unittest.TestCase):
                 purpose="Exercise the save workflow",
             )
             def failing_test() -> None:
+                with reports.step("Open the document"):
+                    with _action(
+                        "Open document",
+                        hwnd=HWND(7),
+                        capture=False,
+                    ):
+                        pass
+                with _action(
+                    "Refresh workspace",
+                    hwnd=HWND(7),
+                    capture=False,
+                ):
+                    pass
                 with reports.step("Click </script><Save>"):
                     with _action(
                         "Click target",
@@ -70,9 +83,24 @@ class ReportingTests(unittest.TestCase):
             self.assertIn("Editor &amp; tools", html)
             self.assertNotIn("Rerunning may help", html)
             self.assertNotIn("Likely", html)
-            self.assertNotIn("<h2>Steps</h2>", html)
             self.assertNotIn("<h2>Environment</h2>", html)
             self.assertIn("Technical details", html)
+            self.assertIn("<h2>Steps</h2>", html)
+            self.assertIn("<ol class='step-timeline'>", html)
+            self.assertIn("aria-label='Passed'>✓</span>", html)
+            self.assertIn("aria-label='Failed'>×</span>", html)
+            self.assertIn("<strong>Open the document</strong>", html)
+            self.assertIn("<strong>Open document</strong>", html)
+            self.assertIn("<strong>Outside a named step</strong>", html)
+            self.assertIn("<strong>Refresh workspace</strong>", html)
+            self.assertLess(
+                html.index("<strong>Open the document</strong>"),
+                html.index("<strong>Refresh workspace</strong>"),
+            )
+            self.assertLess(
+                html.index("<strong>Refresh workspace</strong>"),
+                html.index("<strong>Click &lt;/script&gt;&lt;Save&gt;</strong>"),
+            )
             self.assertIn("max-height: min(48vh, 380px)", html)
             self.assertIn("id='playback-speed'", html)
             self.assertIn("id='frame-slider'", html)
@@ -91,8 +119,14 @@ class ReportingTests(unittest.TestCase):
             )
             self.assertEqual(trace["test"]["id"], "failing_test")
             self.assertEqual(trace["failure"]["type"], "RuntimeError")
-            self.assertEqual(trace["steps"][0]["status"], "failed")
-            self.assertEqual(trace["actions"][0]["action"], "Click target")
+            self.assertEqual(
+                [step["status"] for step in trace["steps"]],
+                ["passed", "failed"],
+            )
+            self.assertEqual(
+                [action["action"] for action in trace["actions"]],
+                ["Open document", "Refresh workspace", "Click target"],
+            )
 
     def test_missing_target_image_is_prominent_in_report(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

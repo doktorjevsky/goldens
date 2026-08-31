@@ -17,7 +17,7 @@ environment:
 ```powershell
 py -m venv C:\Tools\litewinwrap-env
 C:\Tools\litewinwrap-env\Scripts\python -m pip install `
-    C:\Transfer\litewinwrap-0.1.0a8-py3-none-any.whl
+    C:\Transfer\litewinwrap-0.1.0a9-py3-none-any.whl
 ```
 
 For editable development from this directory:
@@ -297,6 +297,10 @@ their full-size files. `failure.gif` remains available as a portable fallback.
 Traceback and action details are collapsed; the complete machine-readable trace
 remains in `trace.json`. High-level window operations and direct matching,
 mouse, and keyboard primitives are traced automatically.
+
+Technical details present steps as one numbered, chronological timeline. Each
+step contains its actions in execution order; completed steps have a green
+checkmark and the failed step is marked in red.
 
 While a window is active, reports sample it every
 `recording_interval_seconds=0.2` (up to 5 captured frames per second). Playback
