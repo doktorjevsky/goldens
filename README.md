@@ -67,9 +67,10 @@ destination to the corresponding directory.
   stays synchronized in both directions between the tree and editor. Boundary
   names appear as hover tooltips instead of labels over the image. Double-click
   a PNG or annotation name to rename it in place; Enter commits and Escape
-  cancels. Use **File → New Folder…** or **Ctrl+N** to create a folder beneath
-  the selected resource directory, or beneath the open resource root when
-  nothing is selected. F2 also renames non-root folders. Drag PNGs
+  cancels. Use **File → New Folder** or **Ctrl+N** to create a uniquely named
+  folder beneath the selected resource directory—or the open root when nothing
+  is selected—and rename it immediately in the tree, matching File Explorer.
+  F2 also renames non-root folders. Drag PNGs
   and folders onto a directory to move them within the open resource root;
   annotation rows cannot be dragged. PNG moves keep the same-stem JSON sidecar
   attached. If a move or rename would replace a PNG, Goldens asks first with
