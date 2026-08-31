@@ -75,6 +75,18 @@ class MatchTests(unittest.TestCase):
 
         self.assertEqual(tuple(item.rect for item in found), (Rect(21, 17, 30, 25),))
 
+    def test_spatially_flat_black_target_can_match(self) -> None:
+        generator = np.random.default_rng(8)
+        pixels = generator.integers(32, 256, (40, 50, 3), dtype=np.uint8)
+        template = np.zeros((8, 9, 3), dtype=np.uint8)
+        pixels[17:25, 21:30] = template
+        capture = Capture(pixels, Rect(0, 0, 50, 40))
+
+        found = match_all(capture, Target("black", template), threshold=0.99)
+
+        self.assertEqual(tuple(item.rect for item in found), (Rect(21, 17, 30, 25),))
+        self.assertAlmostEqual(found[0].score, 1.0)
+
     def test_match_rejects_multiple_occurrences(self) -> None:
         pixels = np.zeros((60, 80, 3), dtype=np.uint8)
         pixels[5:15, 6:18] = self.template

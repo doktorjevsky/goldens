@@ -102,9 +102,17 @@ def _score_map(capture_value: Capture, target: Target) -> np.ndarray:
         axis=(0, 1),
     )
     if float(np.max(spatial_deviation)) < 1.0:
+        capture_pixels = capture_value.pixels
+        target_pixels = target.pixels
+        if not np.any(target_pixels):
+            # SQDIFF_NORMED has a zero denominator for an all-zero template.
+            # Compare the inverse images so black has the same stable scoring
+            # behaviour as an all-white flat target.
+            capture_pixels = 255 - capture_pixels
+            target_pixels = 255 - target_pixels
         difference = cv2.matchTemplate(
-            capture_value.pixels,
-            target.pixels,
+            capture_pixels,
+            target_pixels,
             cv2.TM_SQDIFF_NORMED,
         )
         scores = 1.0 - difference

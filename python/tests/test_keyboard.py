@@ -37,6 +37,26 @@ class KeyboardTests(unittest.TestCase):
         self.assertEqual([item.ki.wScan for item in inputs], [ord("A"), ord("A"), 0xE9, 0xE9])
         self.assertTrue(all(item.ki.dwFlags & keyboard.KEYEVENTF_UNICODE for item in inputs))
 
+    def test_invalid_intervals_are_rejected_before_sending_input(self) -> None:
+        invalid = (-0.1, float("inf"), float("nan"))
+        with patch("litewinwrap.keyboard.win32.send_input") as send:
+            for interval_seconds in invalid:
+                with self.subTest(action="press", value=interval_seconds):
+                    with self.assertRaisesRegex(ValueError, "interval_seconds"):
+                        keyboard.press(
+                            "a",
+                            count=2,
+                            interval_seconds=interval_seconds,
+                        )
+                with self.subTest(action="type_text", value=interval_seconds):
+                    with self.assertRaisesRegex(ValueError, "interval_seconds"):
+                        keyboard.type_text(
+                            "ab",
+                            interval_seconds=interval_seconds,
+                        )
+
+        send.assert_not_called()
+
     def test_down_and_up_accept_named_keys(self) -> None:
         with patch("litewinwrap.keyboard.win32.send_input", return_value=1) as send:
             keyboard.down("shift")
