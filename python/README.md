@@ -17,7 +17,7 @@ environment:
 ```powershell
 py -m venv C:\Tools\litewinwrap-env
 C:\Tools\litewinwrap-env\Scripts\python -m pip install `
-    C:\Transfer\litewinwrap-0.1.0a7-py3-none-any.whl
+    C:\Transfer\litewinwrap-0.1.0a8-py3-none-any.whl
 ```
 
 For editable development from this directory:
@@ -289,7 +289,8 @@ that could not be found. It then re-raises the original exception, preserving
 normal script and CI failure behavior. Passing tests write no artifact.
 
 The report page leads with the error, missing target, screen at failure, and an
-interactive frame player. The player supports play/pause, previous/next,
+interactive frame player. It shows the same matching rectangles, click markers,
+and action labels as the GIF. The player supports play/pause, previous/next,
 scrubbing, and speeds from 0.25× to 2×. It works offline with no server or
 external assets. Images are constrained to the browser viewport and link to
 their full-size files. `failure.gif` remains available as a portable fallback.

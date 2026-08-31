@@ -35,7 +35,11 @@ class ReportingTests(unittest.TestCase):
                     with _action(
                         "Click target",
                         hwnd=HWND(7),
-                        details={"target": "toolbar/save", "point": [110, 210]},
+                        details={
+                            "target": "toolbar/save",
+                            "point": [110, 210],
+                            "match_rect": [120, 205, 128, 215],
+                        },
                     ):
                         pass
                     raise RuntimeError("save failed")
@@ -57,6 +61,9 @@ class ReportingTests(unittest.TestCase):
             )
             with Image.open(report.parent / "failure.gif") as animation:
                 self.assertGreaterEqual(animation.n_frames, 1)
+            with Image.open(report.parent / "images" / "frame-001.png") as frame:
+                self.assertEqual(frame.size, (30, 64))
+                self.assertEqual(frame.getpixel((20, 5)), (245, 158, 11))
 
             html = report.read_text(encoding="utf-8")
             self.assertIn("Save &lt;document&gt;", html)

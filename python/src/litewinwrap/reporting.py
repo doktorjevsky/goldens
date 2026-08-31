@@ -848,9 +848,10 @@ def _write_media(
         label_font = ImageFont.load_default()
 
     prepared: list[Image.Image] = []
+    frame_paths: list[Path] = []
     for index, frame in enumerate(frames, start=1):
         filename = f"frame-{index:03d}.png"
-        (images_directory / filename).write_bytes(frame.png)
+        frame_paths.append(images_directory / filename)
         result["frames"].append(
             {
                 "path": f"images/{filename}",
@@ -885,7 +886,12 @@ def _write_media(
     width = max(image.width for image in prepared)
     height = max(image.height for image in prepared)
     rendered: list[Image.Image] = []
-    for image, frame in zip(prepared, frames, strict=True):
+    for image, frame, frame_path in zip(
+        prepared,
+        frames,
+        frame_paths,
+        strict=True,
+    ):
         canvas = Image.new("RGB", (width, height + 44), (17, 24, 39))
         x = (width - image.width) // 2
         y = (height - image.height) // 2
@@ -897,6 +903,7 @@ def _write_media(
             fill=(241, 245, 249),
             font=label_font,
         )
+        canvas.save(frame_path, format="PNG", optimize=True)
         rendered.append(canvas)
 
     final_image = directory / "failure.png"
