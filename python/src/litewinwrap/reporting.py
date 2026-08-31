@@ -951,7 +951,6 @@ def _write_media(
 def _render_html(trace: dict[str, Any], media: dict[str, Any]) -> str:
     test = trace["test"]
     failure = trace["failure"]
-    step_names = {item["id"]: item["title"] for item in trace["steps"]}
     failed_step = next(
         (
             item["title"]
@@ -1053,15 +1052,7 @@ def _render_html(trace: dict[str, Any], media: dict[str, Any]) -> str:
             "alt='Recorded action sequence'></section>"
         )
 
-    action_items = "".join(
-        "<li>"
-        f"<span>{escape(step_names.get(item.get('step_id'), item['action']))}</span>"
-        f"<strong>{escape(item['action'])}</strong>"
-        f"<small>{float(item['started_seconds']):.2f}s · {escape(item['status'])}</small>"
-        "</li>"
-        for item in trace["actions"]
-        if int(item["depth"]) == 0
-    )
+    step_timeline = _render_step_timeline(trace)
     source = test.get("source_file")
     if source and test.get("source_line"):
         source = f"{source}:{test['source_line']}"
@@ -1111,7 +1102,16 @@ figure {{ margin: 0; min-width: 0; }} figcaption {{ margin-bottom: 10px; color: 
 .player-controls button, .player-controls select {{ min-height: 32px; border: 1px solid #cbd5e1; border-radius: 6px; background: white; color: #172033; }} .player-controls button {{ padding: 4px 10px; cursor: pointer; }} .player-controls button:disabled {{ cursor: default; opacity: .45; }}
 .player-controls input {{ width: 100%; }} .player-controls output, .player-controls label {{ color: #475569; font-size: 13px; white-space: nowrap; }}
 .frame-label {{ min-height: 1.3em; margin: 8px 0 0; color: #64748b; font-size: 13px; text-align: center; }}
-.actions {{ margin: 18px 0; padding-left: 24px; }} .actions li {{ padding: 5px 0; }} .actions span, .actions strong, .actions small {{ display: block; }} .actions span, .actions small {{ color: #64748b; }}
+.step-timeline {{ display: grid; gap: 10px; margin: 12px 0 18px; padding: 0; list-style: none; counter-reset: report-step; }}
+.step-entry {{ counter-increment: report-step; }} .step-group {{ border: 1px solid #dbe2ea; border-radius: 8px; overflow: hidden; }}
+.step-heading {{ display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: #f8fafc; list-style: none; }}
+.step-heading::-webkit-details-marker {{ display: none; }} .step-heading::before {{ content: "›"; flex: 0 0 auto; color: #64748b; font-size: 20px; line-height: 1; transform: rotate(0deg); }} .step-group[open] > .step-heading::before {{ transform: rotate(90deg); }}
+.step-heading > span:last-child {{ display: grid; gap: 2px; }} .step-heading strong {{ font-size: 14px; }} .step-heading small {{ color: #64748b; }}
+.step-entry .step-heading strong::before {{ content: "Step " counter(report-step) " · "; color: #64748b; font-weight: 600; }}
+.step-status {{ display: grid; flex: 0 0 24px; width: 24px; height: 24px; place-items: center; border-radius: 999px; font-weight: 800; line-height: 1; }}
+.step-status.passed, .action-status.passed {{ color: #166534; background: #dcfce7; }} .step-status.failed, .action-status.failed {{ color: #991b1b; background: #fee2e2; }}
+.step-actions {{ margin: 0; padding: 5px 12px 7px 42px; }} .step-actions li {{ padding: 5px 0; }} .step-actions strong, .step-actions small {{ display: block; }} .step-actions small, .no-actions {{ color: #64748b; }} .no-actions {{ margin: 0; padding: 10px 12px 12px 46px; font-size: 13px; }}
+.timeline-action {{ display: flex; align-items: center; gap: 10px; padding: 10px 13px; border: 1px solid #dbe2ea; border-radius: 8px; }} .timeline-action > span:last-child {{ display: grid; gap: 2px; }} .timeline-action small {{ color: #64748b; }} .action-status {{ display: grid; flex: 0 0 24px; width: 24px; height: 24px; place-items: center; border-radius: 999px; font-weight: 800; line-height: 1; }}
 pre {{ white-space: pre-wrap; overflow-wrap: anywhere; background: #0f172a; color: #e2e8f0; border-radius: 7px; padding: 14px; overflow: auto; }}
 summary {{ cursor: pointer; color: #334155; font-weight: 600; }}
 @media (max-width: 680px) {{ .evidence {{ grid-template-columns: 1fr; }} .player-controls {{ grid-template-columns: repeat(3, 1fr); }} .player-controls input {{ grid-column: 1 / 3; }} }}
@@ -1120,7 +1120,7 @@ summary {{ cursor: pointer; color: #334155; font-weight: 600; }}
 <body><main>
 <header><span class="badge">FAILED</span><h1>{escape(test["title"])}</h1><p class="message"><strong>{escape(failure["type"])}</strong>: {escape(failure["message"])}</p><p class="context">{context_html}</p></header>
 {evidence_html}{sequence_html}
-<details class="technical"><summary>Technical details</summary>{technical_facts}<h2>Actions</h2><ol class="actions">{action_items}</ol><h2>Traceback</h2><pre>{escape(failure["traceback"])}</pre>{capture_errors}</details>
+<details class="technical"><summary>Technical details</summary>{technical_facts}<h2>Steps</h2>{step_timeline}<h2>Traceback</h2><pre>{escape(failure["traceback"])}</pre>{capture_errors}</details>
 </main>{player_script}</body></html>"""
 
 
@@ -1202,6 +1202,103 @@ def _render_player_script(
   schedule();
 }})();
 </script>"""
+
+
+def _render_step_timeline(trace: dict[str, Any]) -> str:
+    actions = [item for item in trace["actions"] if int(item["depth"]) == 0]
+    actions_by_step: dict[int, list[dict[str, Any]]] = {}
+    timeline: list[tuple[float, int, dict[str, Any]]] = []
+
+    for action in actions:
+        step_id = action.get("step_id")
+        if step_id is None:
+            timeline.append((float(action["started_seconds"]), 1, action))
+        else:
+            actions_by_step.setdefault(int(step_id), []).append(action)
+
+    known_step_ids: set[int] = set()
+    for step in trace["steps"]:
+        step_id = int(step["id"])
+        known_step_ids.add(step_id)
+        timeline.append((float(step["started_seconds"]), 0, step))
+
+    for step_id, step_actions in actions_by_step.items():
+        if step_id not in known_step_ids:
+            timeline.extend(
+                (float(action["started_seconds"]), 1, action) for action in step_actions
+            )
+
+    groups: list[str] = []
+    for _, entry_type, entry in sorted(
+        timeline,
+        key=lambda item: (item[0], item[1]),
+    ):
+        if entry_type == 0:
+            groups.append(
+                _render_step_group(
+                    title=str(entry["title"]),
+                    status=str(entry["status"]),
+                    duration_seconds=entry.get("duration_seconds"),
+                    actions=actions_by_step.get(int(entry["id"]), []),
+                )
+            )
+        else:
+            groups.append(_render_timeline_action(entry))
+
+    if not groups:
+        return "<p class='no-actions'>No named steps or actions were recorded.</p>"
+    return "<ol class='step-timeline'>" + "".join(groups) + "</ol>"
+
+
+def _render_step_group(
+    *,
+    title: str,
+    status: str,
+    duration_seconds: Any,
+    actions: list[dict[str, Any]],
+) -> str:
+    icon = "✓" if status == "passed" else "×"
+    status_label = "Passed" if status == "passed" else "Failed"
+    timing = (
+        f" · {float(duration_seconds):.2f}s" if duration_seconds is not None else ""
+    )
+    action_items = "".join(
+        "<li>"
+        f"<strong>{escape(item['action'])}</strong>"
+        f"<small>{float(item['duration_seconds']):.2f}s · "
+        f"{escape(str(item['status']))}</small>"
+        "</li>"
+        for item in sorted(actions, key=lambda item: float(item["started_seconds"]))
+    )
+    actions_html = (
+        f"<ol class='step-actions'>{action_items}</ol>"
+        if action_items
+        else "<p class='no-actions'>No recorded actions</p>"
+    )
+    return (
+        "<li class='step-entry'>"
+        f"<details class='step-group {escape(status)}' open>"
+        "<summary class='step-heading'>"
+        f"<span class='step-status {escape(status)}' role='img' "
+        f"aria-label='{status_label}'>{icon}</span>"
+        f"<span><strong>{escape(title)}</strong>"
+        f"<small>{status_label}{timing}</small></span></summary>"
+        f"{actions_html}</details></li>"
+    )
+
+
+def _render_timeline_action(action: dict[str, Any]) -> str:
+    status = str(action["status"])
+    icon = "✓" if status == "passed" else "×"
+    status_label = "Passed" if status == "passed" else "Failed"
+    return (
+        f"<li class='timeline-action {escape(status)}'>"
+        f"<span class='action-status {escape(status)}' role='img' "
+        f"aria-label='{status_label}'>{icon}</span>"
+        f"<span><strong>{escape(str(action['action']))}</strong>"
+        f"<small>{status_label} · {float(action['duration_seconds']):.2f}s</small>"
+        "</span></li>"
+    )
 
 
 def _fact_grid(items: list[tuple[str, Any]]) -> str:
