@@ -17,7 +17,7 @@ environment:
 ```powershell
 py -m venv C:\Tools\litewinwrap-env
 C:\Tools\litewinwrap-env\Scripts\python -m pip install `
-    C:\Transfer\litewinwrap-0.1.0a9-py3-none-any.whl
+    C:\Transfer\litewinwrap-0.1.0a10-py3-none-any.whl
 ```
 
 For editable development from this directory:
@@ -300,7 +300,9 @@ mouse, and keyboard primitives are traced automatically.
 
 Technical details present steps as one numbered, chronological timeline. Each
 step contains its actions in execution order; completed steps have a green
-checkmark and the failed step is marked in red.
+checkmark and the failed step is marked in red. Steps start expanded and can be
+collapsed individually. Actions outside a named step remain inline at their
+actual chronological position.
 
 While a window is active, reports sample it every
 `recording_interval_seconds=0.2` (up to 5 captured frames per second). Playback

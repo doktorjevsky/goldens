@@ -91,7 +91,11 @@ class ReportingTests(unittest.TestCase):
             self.assertIn("aria-label='Failed'>×</span>", html)
             self.assertIn("<strong>Open the document</strong>", html)
             self.assertIn("<strong>Open document</strong>", html)
-            self.assertIn("<strong>Outside a named step</strong>", html)
+            self.assertNotIn("Outside a named step", html)
+            self.assertNotIn(">Other<", html)
+            self.assertIn("<details class='step-group passed' open>", html)
+            self.assertIn("<details class='step-group failed' open>", html)
+            self.assertIn("<li class='timeline-action passed'>", html)
             self.assertIn("<strong>Refresh workspace</strong>", html)
             self.assertLess(
                 html.index("<strong>Open the document</strong>"),

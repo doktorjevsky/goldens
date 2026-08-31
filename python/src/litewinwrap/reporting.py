@@ -1103,14 +1103,15 @@ figure {{ margin: 0; min-width: 0; }} figcaption {{ margin-bottom: 10px; color: 
 .player-controls input {{ width: 100%; }} .player-controls output, .player-controls label {{ color: #475569; font-size: 13px; white-space: nowrap; }}
 .frame-label {{ min-height: 1.3em; margin: 8px 0 0; color: #64748b; font-size: 13px; text-align: center; }}
 .step-timeline {{ display: grid; gap: 10px; margin: 12px 0 18px; padding: 0; list-style: none; counter-reset: report-step; }}
-.step-group {{ position: relative; border: 1px solid #dbe2ea; border-radius: 8px; overflow: hidden; }}
-.step-group.named {{ counter-increment: report-step; }}
-.step-heading {{ display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: #f8fafc; }}
+.step-entry {{ counter-increment: report-step; }} .step-group {{ border: 1px solid #dbe2ea; border-radius: 8px; overflow: hidden; }}
+.step-heading {{ display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: #f8fafc; list-style: none; }}
+.step-heading::-webkit-details-marker {{ display: none; }} .step-heading::before {{ content: "›"; flex: 0 0 auto; color: #64748b; font-size: 20px; line-height: 1; transform: rotate(0deg); }} .step-group[open] > .step-heading::before {{ transform: rotate(90deg); }}
 .step-heading > span:last-child {{ display: grid; gap: 2px; }} .step-heading strong {{ font-size: 14px; }} .step-heading small {{ color: #64748b; }}
-.step-group.named .step-heading strong::before {{ content: "Step " counter(report-step) " · "; color: #64748b; font-weight: 600; }}
+.step-entry .step-heading strong::before {{ content: "Step " counter(report-step) " · "; color: #64748b; font-weight: 600; }}
 .step-status {{ display: grid; flex: 0 0 24px; width: 24px; height: 24px; place-items: center; border-radius: 999px; font-weight: 800; line-height: 1; }}
-.step-status.passed {{ color: #166534; background: #dcfce7; }} .step-status.failed {{ color: #991b1b; background: #fee2e2; }} .step-status.other {{ color: #475569; background: #e2e8f0; }}
+.step-status.passed, .action-status.passed {{ color: #166534; background: #dcfce7; }} .step-status.failed, .action-status.failed {{ color: #991b1b; background: #fee2e2; }}
 .step-actions {{ margin: 0; padding: 5px 12px 7px 42px; }} .step-actions li {{ padding: 5px 0; }} .step-actions strong, .step-actions small {{ display: block; }} .step-actions small, .no-actions {{ color: #64748b; }} .no-actions {{ margin: 0; padding: 10px 12px 12px 46px; font-size: 13px; }}
+.timeline-action {{ display: flex; align-items: center; gap: 10px; padding: 10px 13px; border: 1px solid #dbe2ea; border-radius: 8px; }} .timeline-action > span:last-child {{ display: grid; gap: 2px; }} .timeline-action small {{ color: #64748b; }} .action-status {{ display: grid; flex: 0 0 24px; width: 24px; height: 24px; place-items: center; border-radius: 999px; font-weight: 800; line-height: 1; }}
 pre {{ white-space: pre-wrap; overflow-wrap: anywhere; background: #0f172a; color: #e2e8f0; border-radius: 7px; padding: 14px; overflow: auto; }}
 summary {{ cursor: pointer; color: #334155; font-weight: 600; }}
 @media (max-width: 680px) {{ .evidence {{ grid-template-columns: 1fr; }} .player-controls {{ grid-template-columns: repeat(3, 1fr); }} .player-controls input {{ grid-column: 1 / 3; }} }}
@@ -1239,19 +1240,10 @@ def _render_step_timeline(trace: dict[str, Any]) -> str:
                     status=str(entry["status"]),
                     duration_seconds=entry.get("duration_seconds"),
                     actions=actions_by_step.get(int(entry["id"]), []),
-                    named=True,
                 )
             )
         else:
-            groups.append(
-                _render_step_group(
-                    title="Outside a named step",
-                    status="other",
-                    duration_seconds=None,
-                    actions=[entry],
-                    named=False,
-                )
-            )
+            groups.append(_render_timeline_action(entry))
 
     if not groups:
         return "<p class='no-actions'>No named steps or actions were recorded.</p>"
@@ -1264,13 +1256,9 @@ def _render_step_group(
     status: str,
     duration_seconds: Any,
     actions: list[dict[str, Any]],
-    named: bool,
 ) -> str:
-    icon = {"passed": "✓", "failed": "×"}.get(status, "•")
-    status_label = {"passed": "Passed", "failed": "Failed"}.get(
-        status,
-        "Other",
-    )
+    icon = "✓" if status == "passed" else "×"
+    status_label = "Passed" if status == "passed" else "Failed"
     timing = (
         f" · {float(duration_seconds):.2f}s" if duration_seconds is not None else ""
     )
@@ -1287,15 +1275,29 @@ def _render_step_group(
         if action_items
         else "<p class='no-actions'>No recorded actions</p>"
     )
-    named_class = " named" if named else ""
     return (
-        f"<li class='step-group {escape(status)}{named_class}'>"
-        "<div class='step-heading'>"
+        "<li class='step-entry'>"
+        f"<details class='step-group {escape(status)}' open>"
+        "<summary class='step-heading'>"
         f"<span class='step-status {escape(status)}' role='img' "
         f"aria-label='{status_label}'>{icon}</span>"
         f"<span><strong>{escape(title)}</strong>"
-        f"<small>{status_label}{timing}</small></span></div>"
-        f"{actions_html}</li>"
+        f"<small>{status_label}{timing}</small></span></summary>"
+        f"{actions_html}</details></li>"
+    )
+
+
+def _render_timeline_action(action: dict[str, Any]) -> str:
+    status = str(action["status"])
+    icon = "✓" if status == "passed" else "×"
+    status_label = "Passed" if status == "passed" else "Failed"
+    return (
+        f"<li class='timeline-action {escape(status)}'>"
+        f"<span class='action-status {escape(status)}' role='img' "
+        f"aria-label='{status_label}'>{icon}</span>"
+        f"<span><strong>{escape(str(action['action']))}</strong>"
+        f"<small>{status_label} · {float(action['duration_seconds']):.2f}s</small>"
+        "</span></li>"
     )
 
 
