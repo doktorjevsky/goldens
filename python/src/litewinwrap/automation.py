@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from math import isfinite
 from typing import TYPE_CHECKING, Literal, Pattern
 
-from . import win32
+from . import reporting, win32
 from .types import HWND
 
 
@@ -121,6 +121,7 @@ class Automation:
         if delay_seconds:
             time.sleep(delay_seconds)
 
+    @reporting._trace("Bind window")
     def window(self, hwnd: HWND | int) -> Window:
         """Bind an existing HWND to this automation policy."""
 
@@ -128,6 +129,7 @@ class Automation:
 
         return Window(HWND(int(hwnd)), self)
 
+    @reporting._trace("List windows")
     def windows(self, *, visible_only: bool = True) -> tuple[Window, ...]:
         """Return the current top-level windows."""
 
@@ -136,6 +138,7 @@ class Automation:
             windows = tuple(window for window in windows if window.visible)
         return windows
 
+    @reporting._trace("Find windows")
     def find_windows(
         self,
         title: TextSelector | None = None,
@@ -154,6 +157,7 @@ class Automation:
             and (process_id is None or window.process_id == process_id)
         )
 
+    @reporting._trace("Find window")
     def find_window(
         self,
         title: TextSelector | None = None,

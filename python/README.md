@@ -17,7 +17,7 @@ environment:
 ```powershell
 py -m venv C:\Tools\litewinwrap-env
 C:\Tools\litewinwrap-env\Scripts\python -m pip install `
-    C:\Transfer\litewinwrap-0.1.0a3-py3-none-any.whl
+    C:\Transfer\litewinwrap-0.1.0a8-py3-none-any.whl
 ```
 
 For editable development from this directory:
@@ -245,6 +245,79 @@ receive a useful stream of movement events while the button is held. Pass
 
 `subprocess.Popen` remains the normal way to launch applications. Pass an
 argument list and avoid `shell=True` for values assembled from external input.
+
+## Failure reports
+
+`Reports` adds runner-independent, per-test failure artifacts without changing
+normal automation calls:
+
+```python
+from pathlib import Path
+
+from litewinwrap import Reports
+
+
+reports = Reports(
+    Path("artifacts"),
+    max_frames=40,
+    recording_interval_seconds=0.2,
+)
+
+
+@reports.test(
+    title="Create and save a document",
+    owner="editor-team",
+    purpose="Verify the complete save workflow",
+)
+def test_save_document() -> None:
+    with reports.step("Create a blank document"):
+        window.click(new_document)
+
+    with reports.step("Save the document"):
+        window.click(save)
+        window.locate(saved_confirmation)
+
+
+if __name__ == "__main__":
+    test_save_document()
+```
+
+On failure, the decorator writes one static directory for that test containing
+`index.html`, `trace.json`, `failure.gif`, `failure.png`, and its action-boundary
+frames. A visual matching failure also includes `target.png`, the exact target
+that could not be found. It then re-raises the original exception, preserving
+normal script and CI failure behavior. Passing tests write no artifact.
+
+The report page leads with the error, missing target, screen at failure, and an
+interactive frame player. It shows the same matching rectangles, click markers,
+and action labels as the GIF. The player supports play/pause, previous/next,
+scrubbing, and speeds from 0.25× to 2×. It works offline with no server or
+external assets. Images are constrained to the browser viewport and link to
+their full-size files. `failure.gif` remains available as a portable fallback.
+Traceback and action details are collapsed; the complete machine-readable trace
+remains in `trace.json`. High-level window operations and direct matching,
+mouse, and keyboard primitives are traced automatically.
+
+While a window is active, reports sample it every
+`recording_interval_seconds=0.2` (up to 5 captured frames per second). Playback
+speed is selected in the HTML report rather than configured in Python. GIFs are
+downscaled and palette-compressed to keep artifact sizes reasonable.
+
+Literal text passed to `type_text()` or `write()` is never recorded; reports
+store only its character count. Window screenshots can still contain sensitive
+content. Disable them for a whole test or one step when required:
+
+```python
+@reports.test(title="Enter a secret", capture_frames=False)
+def test_secret() -> None:
+    ...
+
+with reports.step("Enter a secret", capture_frames=False):
+    window.type_text(secret)
+```
+
+Reports keep at most `max_frames` and are written only for failures in this
+alpha. They use only local files and require no server or external web assets.
 
 ## Tests
 

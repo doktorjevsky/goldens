@@ -6,7 +6,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Literal
 
-from . import win32
+from . import reporting, win32
 from .types import Point
 
 
@@ -93,6 +93,7 @@ def _absolute_move_input(
     )
 
 
+@reporting._trace("Move pointer to")
 def move_to(
     point: Point | tuple[int, int],
     *,
@@ -137,6 +138,7 @@ def move_to(
     return sent
 
 
+@reporting._trace("Move pointer by")
 def move_by(dx: int, dy: int, *, duration_seconds: float = 0.0) -> int:
     """Move by an exact number of screen pixels."""
 
@@ -148,11 +150,13 @@ def move_by(dx: int, dy: int, *, duration_seconds: float = 0.0) -> int:
     )
 
 
+@reporting._trace("Mouse button down")
 def button_down(button: Button = "left") -> int:
     flags, data = _DOWN[button]
     return win32.send_input([_input(flags, data=data)])
 
 
+@reporting._trace("Mouse button up")
 def button_up(button: Button = "left") -> int:
     flags, data = _UP[button]
     return win32.send_input([_input(flags, data=data)])
@@ -162,13 +166,15 @@ def button_up(button: Button = "left") -> int:
 def hold(button: Button = "left") -> Iterator[None]:
     """Hold a mouse button for the duration of a ``with`` block."""
 
-    button_down(button)
-    try:
-        yield
-    finally:
-        button_up(button)
+    with reporting._action("Hold mouse button", details={"button": button}):
+        button_down(button)
+        try:
+            yield
+        finally:
+            button_up(button)
 
 
+@reporting._trace("Click pointer")
 def click(
     point: Point | tuple[int, int] | None = None,
     *,
@@ -196,6 +202,7 @@ def click(
     return sent
 
 
+@reporting._trace("Double-click pointer")
 def double_click(
     point: Point | tuple[int, int] | None = None,
     *,
@@ -204,11 +211,13 @@ def double_click(
     return click(point, button=button, count=2)
 
 
+@reporting._trace("Scroll pointer")
 def scroll(notches: int, *, horizontal: bool = False) -> int:
     flag = MOUSEEVENTF_HWHEEL if horizontal else MOUSEEVENTF_WHEEL
     return win32.send_input([_input(flag, data=notches * WHEEL_DELTA)])
 
 
+@reporting._trace("Drag pointer to")
 def drag_to(
     destination: Point | tuple[int, int],
     *,
@@ -226,6 +235,7 @@ def drag_to(
     return sent
 
 
+@reporting._trace("Drag pointer by")
 def drag_by(
     dx: int,
     dy: int,

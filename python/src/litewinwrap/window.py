@@ -4,7 +4,7 @@ import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from . import keyboard, mouse, win32
+from . import keyboard, mouse, reporting, win32
 from .automation import TextSelector, _describe_selectors, _matches
 from .mouse import Button
 from .types import Capture, HWND, Match, Rect, Target
@@ -87,6 +87,7 @@ class Window:
     def foreground(self) -> bool:
         return win32.get_foreground_window() == self.hwnd
 
+    @reporting._trace("List child windows")
     def children(
         self,
         *,
@@ -103,6 +104,7 @@ class Window:
             windows = tuple(window for window in windows if window.visible)
         return windows
 
+    @reporting._trace("Find child windows")
     def find_children(
         self,
         title: TextSelector | None = None,
@@ -132,6 +134,7 @@ class Window:
                 return ()
             time.sleep(min(_POLL_INTERVAL_SECONDS, remaining_seconds))
 
+    @reporting._trace("Find child window")
     def find_child(
         self,
         title: TextSelector | None = None,
@@ -159,11 +162,13 @@ class Window:
             f"{timeout_seconds:.3f}s"
         )
 
+    @reporting._trace("Capture window")
     def capture(self) -> Capture:
         from . import match as image_match
 
         return image_match.capture(self.hwnd)
 
+    @reporting._trace("Locate all target matches")
     def locate_all(
         self,
         target: Target,
@@ -182,6 +187,7 @@ class Window:
             overlap=self.automation._resolve_overlap(overlap),
         )
 
+    @reporting._trace("Locate target")
     def locate(
         self,
         target: Target,
@@ -207,6 +213,7 @@ class Window:
             retry_on_ambiguity=retry,
         )
 
+    @reporting._trace("Locate best target match")
     def locate_best(
         self,
         target: Target,
@@ -225,6 +232,7 @@ class Window:
             overlap=self.automation._resolve_overlap(overlap),
         )
 
+    @reporting._trace("Hover over target")
     def hover(
         self,
         target: Target,
@@ -251,6 +259,7 @@ class Window:
         self.automation._settle(settle_seconds)
         return found
 
+    @reporting._trace("Click target")
     def click(
         self,
         target: Target,
@@ -283,6 +292,7 @@ class Window:
             wait_after_seconds=self.automation._resolve_settle_seconds(settle_seconds),
         )
 
+    @reporting._trace("Click best target match")
     def click_best(
         self,
         target: Target,
@@ -308,6 +318,7 @@ class Window:
             wait_after_seconds=self.automation._resolve_settle_seconds(settle_seconds),
         )
 
+    @reporting._trace("Type text in window")
     def type_text(
         self,
         text: str,
@@ -327,6 +338,7 @@ class Window:
         self.automation._settle(settle_seconds)
         return self
 
+    @reporting._trace("Press keys in window")
     def press(
         self,
         *keys: Key,
@@ -341,6 +353,7 @@ class Window:
         self.automation._settle(settle_seconds)
         return self
 
+    @reporting._trace("Focus window")
     def focus(
         self,
         *,
@@ -367,11 +380,13 @@ class Window:
         self.automation._settle(settle_seconds)
         return self
 
+    @reporting._trace("Move window")
     def move(self, x: int, y: int, *, settle_seconds: float | None = None) -> Rect:
         win32.move_window(self.hwnd, x, y)
         self.automation._settle(settle_seconds)
         return self.rect
 
+    @reporting._trace("Resize window")
     def resize(
         self,
         width: int,
@@ -383,21 +398,25 @@ class Window:
         self.automation._settle(settle_seconds)
         return self.rect
 
+    @reporting._trace("Restore window")
     def restore(self, *, settle_seconds: float | None = None) -> Rect:
         win32.restore_window(self.hwnd)
         self.automation._settle(settle_seconds)
         return self.rect
 
+    @reporting._trace("Minimize window")
     def minimize(self, *, settle_seconds: float | None = None) -> Window:
         win32.minimize_window(self.hwnd)
         self.automation._settle(settle_seconds)
         return self
 
+    @reporting._trace("Maximize window")
     def maximize(self, *, settle_seconds: float | None = None) -> Rect:
         win32.maximize_window(self.hwnd)
         self.automation._settle(settle_seconds)
         return self.rect
 
+    @reporting._trace("Close window")
     def close(self, *, timeout_seconds: float | None = None) -> None:
         win32.close_window(self.hwnd)
         timeout_seconds = self.automation._resolve_timeout_seconds(timeout_seconds)
