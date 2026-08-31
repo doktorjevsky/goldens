@@ -127,6 +127,53 @@ class GoldensTests(unittest.TestCase):
             ):
                 Goldens.from_png(png)
 
+    def test_rejects_nonstandard_or_ambiguous_json(self) -> None:
+        invalid_documents = {
+            "duplicate key": (
+                '{"annotations":[{"name":"first","name":"second",'
+                '"boundary":{"x":0,"y":0,"width":1,"height":1}}]}'
+            ),
+            "non-finite number": '{"annotations":[],"unknown":NaN}',
+            "unpaired surrogate": (
+                '{"annotations":[{"name":"\\ud800",'
+                '"boundary":{"x":0,"y":0,"width":1,"height":1}}]}'
+            ),
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            png = Path(directory) / "invalid.png"
+            self._write_resource(png, [])
+
+            for name, document in invalid_documents.items():
+                with self.subTest(name=name):
+                    png.with_suffix(".json").write_text(document, encoding="utf-8")
+                    with self.assertRaisesRegex(
+                        GoldensFormatError,
+                        "golden sidecar",
+                    ):
+                        Goldens.from_png(png)
+
+    def test_accepts_valid_supplementary_unicode_in_names(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            png = Path(directory) / "unicode.png"
+            self._write_resource(
+                png,
+                [
+                    {
+                        "name": "button_😀",
+                        "boundary": {
+                            "x": 0,
+                            "y": 0,
+                            "width": 1,
+                            "height": 1,
+                        },
+                    }
+                ],
+            )
+
+            goldens = Goldens.from_png(png)
+
+            self.assertIn("unicode/button_😀", goldens)
+
     def test_rejects_namespace_separator_in_annotation_name(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             png = Path(directory) / "invalid.png"

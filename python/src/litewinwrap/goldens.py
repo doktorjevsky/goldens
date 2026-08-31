@@ -15,6 +15,38 @@ class GoldensFormatError(ValueError):
     pass
 
 
+class _InvalidJsonError(ValueError):
+    pass
+
+
+def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise _InvalidJsonError(f"Duplicate JSON object key: {key!r}")
+        result[key] = value
+    return result
+
+
+def _reject_json_constant(value: str) -> Any:
+    raise _InvalidJsonError(f"Invalid JSON number: {value}")
+
+
+def _validate_json_unicode(value: Any) -> None:
+    if isinstance(value, str):
+        try:
+            value.encode("utf-8")
+        except UnicodeEncodeError as error:
+            raise _InvalidJsonError("JSON contains an unpaired surrogate") from error
+    elif isinstance(value, list):
+        for item in value:
+            _validate_json_unicode(item)
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            _validate_json_unicode(key)
+            _validate_json_unicode(item)
+
+
 def _load_image(path: Path) -> np.ndarray:
     try:
         encoded = np.fromfile(path, dtype=np.uint8)
@@ -28,8 +60,19 @@ def _load_image(path: Path) -> np.ndarray:
 
 def _load_sidecar(path: Path) -> dict[str, Any]:
     try:
-        document = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        document = json.loads(
+            path.read_text(encoding="utf-8"),
+            object_pairs_hook=_unique_json_object,
+            parse_constant=_reject_json_constant,
+        )
+        _validate_json_unicode(document)
+    except (
+        OSError,
+        UnicodeError,
+        json.JSONDecodeError,
+        _InvalidJsonError,
+        RecursionError,
+    ) as error:
         raise GoldensFormatError(f"Could not read golden sidecar: {path}") from error
     if not isinstance(document, dict) or not isinstance(
         document.get("annotations"), list

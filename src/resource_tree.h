@@ -17,5 +17,7 @@ typedef struct {
 } ResourceTreeNode;
 
 const wchar_t *golden_resource_tree_selected_directory(HWND tree);
+const wchar_t *golden_resource_tree_destination_directory(
+    HWND tree, const wchar_t *default_directory);
 
 #endif
