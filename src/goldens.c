@@ -3492,6 +3492,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR command_line, 
         {FVIRTKEY | FCONTROL, 'C', ID_COPY}, {FVIRTKEY | FCONTROL, 'V', ID_PASTE},
         {FVIRTKEY, VK_F2, ID_RENAME},
         {FVIRTKEY, VK_DELETE, ID_DELETE},
+        {FVIRTKEY, '0', ID_FIT},
+        {FVIRTKEY, '1', ID_ACTUAL},
         {FVIRTKEY | FCONTROL, VK_OEM_MINUS, ID_ZOOM_OUT},
         {FVIRTKEY | FCONTROL, VK_OEM_PLUS, ID_ZOOM_IN},
         {FVIRTKEY | FCONTROL, VK_SUBTRACT, ID_ZOOM_OUT},
@@ -3503,7 +3505,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR command_line, 
         HWND tree_edit = TreeView_GetEditControl(g.tree);
         BOOL editing_shortcut = tree_edit && msg.hwnd == tree_edit &&
             msg.message == WM_KEYDOWN &&
-            (msg.wParam == VK_DELETE ||
+            (msg.wParam == VK_DELETE || msg.wParam == '0' || msg.wParam == '1' ||
              (GetKeyState(VK_CONTROL) < 0 &&
               (msg.wParam == 'C' || msg.wParam == 'V' ||
                msg.wParam == 'Z' || msg.wParam == 'Y')));
