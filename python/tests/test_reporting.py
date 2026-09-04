@@ -65,6 +65,10 @@ class ReportingTests(unittest.TestCase):
             self.assertIsNotNone(report)
             assert report is not None
             self.assertTrue(report.is_file())
+            self.assertRegex(
+                report.parent.name,
+                r"^failing-test-\d{8}-\d{6}-\d{6}Z$",
+            )
             self.assertTrue((report.parent / "trace.json").is_file())
             self.assertTrue((report.parent / "failure.gif").is_file())
             self.assertTrue((report.parent / "failure.png").is_file())

@@ -17,7 +17,7 @@ environment:
 ```powershell
 py -m venv C:\Tools\litewinwrap-env
 C:\Tools\litewinwrap-env\Scripts\python -m pip install `
-    C:\Transfer\litewinwrap-0.1.0a10-py3-none-any.whl
+    C:\Transfer\litewinwrap-0.1.0a11-py3-none-any.whl
 ```
 
 For editable development from this directory:

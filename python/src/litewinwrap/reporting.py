@@ -703,7 +703,7 @@ class Reports:
 
     def _write_failure(self, run: _Run, error: Exception) -> Path:
         timestamp = run.started_at.strftime("%Y%m%d-%H%M%S-%fZ")
-        directory = self.artifact_directory / f"{_slug(run.test_id)}--{timestamp}"
+        directory = self.artifact_directory / f"{_slug(run.test_id)}-{timestamp}"
         images_directory = directory / "images"
         images_directory.mkdir(parents=True, exist_ok=False)
 
