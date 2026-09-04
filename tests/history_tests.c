@@ -107,6 +107,25 @@ static int test_failed_operation_can_be_restored(void) {
     return failed;
 }
 
+static int test_recapture_entry_round_trip(void) {
+    static GoldenHistory history;
+    golden_history_init(&history, NULL, NULL);
+    GoldenHistoryEntry recapture = resource_entry(
+        GOLDEN_HISTORY_RECAPTURE_PNG, 9);
+    recapture.staged = TRUE;
+    golden_history_push_new(&history, &recapture);
+    GoldenHistoryEntry popped = {0};
+    int failed = !golden_history_pop_undo(&history, &popped) ||
+                 popped.kind != GOLDEN_HISTORY_RECAPTURE_PNG ||
+                 !popped.staged;
+    golden_history_transfer_to_redo(&history, &popped);
+    if (!failed) failed = !golden_history_pop_redo(&history, &popped) ||
+        popped.kind != GOLDEN_HISTORY_RECAPTURE_PNG;
+    golden_history_entry_dispose(&popped);
+    golden_history_destroy(&history);
+    return failed;
+}
+
 static int test_annotation_ownership_and_filter(void) {
     static GoldenHistory history;
     golden_history_init(&history, NULL, NULL);
@@ -146,6 +165,7 @@ int main(void) {
         test_branch_clears_redo() ||
         test_capacity_evicts_oldest() ||
         test_failed_operation_can_be_restored() ||
+        test_recapture_entry_round_trip() ||
         test_annotation_ownership_and_filter() ||
         test_saved_annotation_comparison()) return 1;
     puts("All Goldens history tests passed.");

@@ -24,7 +24,7 @@ GoldenUiLayout golden_compute_ui_layout(int width, int height, UINT dpi,
     int gap = golden_scale_ui(2, dpi);
     int left_splitter = golden_scale_ui(left_collapsed ?
         GOLDEN_COLLAPSED_SPLITTER_WIDTH : GOLDEN_SPLITTER_WIDTH, dpi);
-    int middle_min = golden_scale_ui(286, dpi);
+    int middle_min = golden_scale_ui(410, dpi);
     int left_min = golden_scale_ui(GOLDEN_RESOURCE_PANE_MIN, dpi);
     int left = left_collapsed ? 0 : golden_scale_ui(
         preferred_left > 0 ? preferred_left : GOLDEN_RESOURCE_PANE_DEFAULT, dpi);
@@ -59,6 +59,33 @@ GoldenUiLayout golden_compute_ui_layout(int width, int height, UINT dpi,
         layout.view_buttons[i] = make_rect(view_x, golden_scale_ui(5, dpi),
             golden_scale_ui(view_widths[i], dpi), golden_scale_ui(24, dpi));
         view_x = layout.view_buttons[i].right + golden_scale_ui(3, dpi);
+    }
+
+    const int recapture_widths[GOLDEN_RECAPTURE_BUTTON_COUNT] = {126, 94, 72};
+    UINT recapture_dpi = min(dpi ? dpi : 96,
+        (UINT)max(48, MulDiv(middle, 96, 410)));
+    int recapture_total = golden_scale_ui(304, recapture_dpi);
+    int recapture_x = editor_x + middle - recapture_total;
+    int recapture_view_x = editor_x + golden_scale_ui(4, recapture_dpi);
+    for (int i = 0; i < GOLDEN_VIEW_BUTTON_COUNT; ++i) {
+        layout.recapture_view_buttons[i] = make_rect(
+            recapture_view_x, golden_scale_ui(5, recapture_dpi),
+            golden_scale_ui(view_widths[i], recapture_dpi),
+            golden_scale_ui(24, recapture_dpi));
+        recapture_view_x = layout.recapture_view_buttons[i].right +
+                           golden_scale_ui(3, recapture_dpi);
+    }
+    layout.recapture_context_label = make_rect(
+        recapture_view_x + golden_scale_ui(1, recapture_dpi), 0,
+        max(1, recapture_x - recapture_view_x -
+               golden_scale_ui(5, recapture_dpi)), top);
+    for (int i = 0; i < GOLDEN_RECAPTURE_BUTTON_COUNT; ++i) {
+        layout.recapture_buttons[i] = make_rect(
+            recapture_x, golden_scale_ui(5, recapture_dpi),
+            golden_scale_ui(recapture_widths[i], recapture_dpi),
+            golden_scale_ui(24, recapture_dpi));
+        recapture_x = layout.recapture_buttons[i].right +
+                      golden_scale_ui(3, recapture_dpi);
     }
 
     return layout;

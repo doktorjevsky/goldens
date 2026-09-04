@@ -113,18 +113,33 @@ destination to the corresponding directory.
   resource is unavailable.
 - While Goldens is running, **F8** captures a screen-composited crop containing
   the foreground application's root window and its visible owned top-level
-  windows. The shortcut is
-  registered globally by default; **Capture → Listen for F8** releases or
-  reclaims it immediately, and the preference persists across restarts. The
-  status bar reports whether listening is on. If another application already
-  owns the global shortcut, Goldens turns listening off and explains why.
+  windows. F8 and F9 are registered globally by default. **Capture → Listen
+  for F8** and **Capture → Listen for F9** release or reclaim each shortcut
+  independently, and both preferences persist across restarts. The status bar
+  reports each listening state. If another application already owns one global
+  shortcut, Goldens turns off only that shortcut and explains why.
   Goldens does not change focus before capture, so menus, dropdowns, and hover
-  state remain intact. The capture is stored directly in the selected resource
+  state remain intact. Goldens itself can be the foreground capture target.
+  The capture is stored directly in the selected resource
   directory, or in the open resource root when nothing is selected, as
   `image.png` with an empty matching annotation sidecar; when that name is
   occupied, Goldens adds a numeric suffix. The new image is opened, selected in
   the resource tree, and its selected filename receives keyboard focus in
   inline rename mode so typing replaces it immediately.
+- **F9** stages a recapture for the PNG (or one of its annotations) selected
+  before switching to the foreground application. It never replaces a file
+  immediately. Goldens returns with an in-editor, side-by-side before/after
+  review that reuses the existing annotations on both images; annotations on
+  the new image can be toggled without changing them. **Fit**, **−**, **+**, and
+  the mouse wheel control each pane independently. Click a pane to select it
+  for the toolbar controls; wheel zoom and dragging affect only the pane under
+  the pointer. The selected pane and both zoom percentages remain visible.
+  Size changes and visual differences above 20% appear as inline warnings,
+  using high-contrast text. **Cancel** is focused initially and **Escape**
+  discards the staged capture. Replacing the PNG requires a deliberate
+  **Replace PNG** click or **Ctrl+Enter**, followed by a confirmation whose
+  default is **Yes**, so **Enter** proceeds. A confirmed replacement preserves
+  the JSON sidecar exactly and participates in **Ctrl+Z**/**Ctrl+Y** history.
 - Use **Fit**, **−**, **+**, or the mouse wheel to control zoom. Wheel zoom keeps
   the image point beneath the mouse pointer in place. **View → Actual
   Size** (or **1**) switches to 100%. With Select, drag an image background or
@@ -168,9 +183,9 @@ lossless BGRA PNG encode/decode and replacement. PNG
 coverage includes all 161 valid PngSuite images, comparison with the
 independent LodePNG decoder, encoded signature/chunk-order/CRC validation,
 padded-stride and malformed-input cases, and exact lossless BGRA/alpha fidelity.
-Scene-capture coverage includes destination collision safety and generation of
-a single screen-composited PNG/JSON resource when an interactive desktop is
-available.
+Scene-capture coverage includes destination collision safety, in-memory
+recapture, normalized visual-difference checks, and generation of a single
+screen-composited PNG/JSON resource when an interactive desktop is available.
 
 Run `install-hooks.bat` once after cloning. It configures the versioned
 `.githooks` directory. Both pre-commit and pre-push run the complete Windows

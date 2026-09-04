@@ -10,14 +10,18 @@
 #define GOLDEN_COLLAPSED_SPLITTER_WIDTH 16
 #define GOLDEN_TOOL_BUTTON_COUNT 3
 #define GOLDEN_VIEW_BUTTON_COUNT 3
+#define GOLDEN_RECAPTURE_BUTTON_COUNT 3
 
 typedef struct {
     RECT resource_tree;
     RECT left_splitter;
     RECT tool_buttons[GOLDEN_TOOL_BUTTON_COUNT];
     RECT context_label;
+    RECT recapture_context_label;
     RECT editor;
     RECT view_buttons[GOLDEN_VIEW_BUTTON_COUNT];
+    RECT recapture_view_buttons[GOLDEN_VIEW_BUTTON_COUNT];
+    RECT recapture_buttons[GOLDEN_RECAPTURE_BUTTON_COUNT];
     RECT status;
 } GoldenUiLayout;
 
