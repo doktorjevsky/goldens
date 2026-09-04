@@ -7,7 +7,7 @@ set "CC=x86_64-w64-mingw32-clang.exe"
 where %CC% >nul 2>nul
 if errorlevel 1 set "CC=C:\tools\llvm-mingw-20260616-ucrt-x86_64\bin\x86_64-w64-mingw32-clang.exe"
 
-for %%S in (model render tool_icon ui_layout tooltip resource_tree resource_ops resource_watcher history atomic_file png_io scene_capture) do (
+for %%S in (model render tool_icon ui_layout tooltip resource_tree resource_ops resource_watcher history atomic_file png_io scene_capture recapture_compare) do (
   if /i "%~1"=="%%S" goto suite_%%S
 )
 
@@ -112,4 +112,12 @@ exit /b %errorlevel%
   -ldwmapi -lgdi32 -luser32 -lole32 -luuid -lwindowscodecs
 if errorlevel 1 exit /b 1
 build\scene_capture_tests.exe
+exit /b %errorlevel%
+
+:suite_recapture_compare
+%CC% -std=c17 -O2 -Wall -Wextra -DUNICODE -D_UNICODE ^
+  tests\recapture_compare_tests.c src\recapture_compare.c ^
+  -o build\recapture_compare_tests.exe -luser32
+if errorlevel 1 exit /b 1
+build\recapture_compare_tests.exe
 exit /b %errorlevel%

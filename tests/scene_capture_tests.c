@@ -85,6 +85,8 @@ int main(void) {
             directory, _countof(directory), png, _countof(png))) failed = 1;
     if (!failed && golden_capture_scene(NULL, root, png, NULL) !=
                        GOLDEN_SCENE_CAPTURE_INVALID_ARGUMENT) failed = 1;
+    if (!failed && golden_capture_scene_image(root, NULL, NULL) !=
+                       GOLDEN_SCENE_CAPTURE_INVALID_ARGUMENT) failed = 1;
 
     RECT bounds = {0};
     GoldenSceneCaptureStatus status = failed ?
@@ -114,6 +116,18 @@ int main(void) {
             failed = 1;
         }
         golden_image_free(&image);
+        GoldenImage memory_capture = {0};
+        GoldenSceneCaptureStatus memory_status = golden_capture_scene_image(
+            popup, &memory_capture, NULL);
+        if (!failed && (memory_status != GOLDEN_SCENE_CAPTURE_OK ||
+                        memory_capture.width !=
+                            (UINT)(bounds.right - bounds.left) ||
+                        memory_capture.height !=
+                            (UINT)(bounds.bottom - bounds.top))) {
+            fprintf(stderr, "invalid in-memory scene capture\n");
+            failed = 1;
+        }
+        golden_image_free(&memory_capture);
         if (!failed && golden_capture_scene(factory, root, png, NULL) !=
                            GOLDEN_SCENE_CAPTURE_DESTINATION_EXISTS) {
             fprintf(stderr, "existing capture destination was replaced\n");

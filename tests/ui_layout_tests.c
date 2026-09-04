@@ -27,11 +27,21 @@ static int check_layout(int width, int height, UINT dpi, int preferred_left,
     if (layout.context_label.right > layout.view_buttons[0].left ||
         layout.context_label.left <
             layout.tool_buttons[GOLDEN_TOOL_BUTTON_COUNT - 1].right) return 1;
+    if (layout.recapture_context_label.right >
+            layout.recapture_buttons[0].left ||
+        layout.recapture_context_label.left <
+            layout.recapture_view_buttons[GOLDEN_VIEW_BUTTON_COUNT - 1].right)
+        return 1;
     for (int i = 0; i < GOLDEN_VIEW_BUTTON_COUNT; ++i) {
         if (layout.view_buttons[i].left < layout.editor.left ||
             layout.view_buttons[i].right > layout.editor.right ||
             (i && layout.view_buttons[i - 1].right >
                   layout.view_buttons[i].left)) return 1;
+        if (layout.recapture_view_buttons[i].left < layout.editor.left ||
+            layout.recapture_view_buttons[i].right > layout.editor.right ||
+            layout.recapture_view_buttons[i].bottom > layout.editor.top ||
+            (i && layout.recapture_view_buttons[i - 1].right >
+                  layout.recapture_view_buttons[i].left)) return 1;
     }
     for (int i = 0; i < GOLDEN_TOOL_BUTTON_COUNT; ++i) {
         if (layout.tool_buttons[i].left < layout.editor.left ||
@@ -43,6 +53,13 @@ static int check_layout(int width, int height, UINT dpi, int preferred_left,
                 golden_scale_ui(26, dpi) ||
             (i && layout.tool_buttons[i - 1].right >
                   layout.tool_buttons[i].left)) return 1;
+    }
+    for (int i = 0; i < GOLDEN_RECAPTURE_BUTTON_COUNT; ++i) {
+        if (layout.recapture_buttons[i].left < layout.editor.left ||
+            layout.recapture_buttons[i].right > layout.editor.right ||
+            layout.recapture_buttons[i].bottom > layout.editor.top ||
+            (i && layout.recapture_buttons[i - 1].right >
+                  layout.recapture_buttons[i].left)) return 1;
     }
     return 0;
 }

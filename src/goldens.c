@@ -20,6 +20,7 @@
 #include "image_io.h"
 #include "clipboard_image.h"
 #include "scene_capture.h"
+#include "recapture_compare.h"
 #include "editor_render.h"
 #include "ui_layout.h"
 #include "ui_tooltip.h"
@@ -42,14 +43,23 @@
 #define WM_BEGIN_TREE_RENAME (WM_APP + 4)
 #define WM_RESOURCE_TREE_CHANGED (WM_APP + 5)
 #define CAPTURE_HOTKEY_ID 0x6a01
+#define RECAPTURE_HOTKEY_ID 0x6a02
 #define CAPTURE_HOTKEY_MODIFIERS MOD_NOREPEAT
 #define CAPTURE_HOTKEY_KEY VK_F8
+#define RECAPTURE_HOTKEY_KEY VK_F9
+
+enum {
+    RECAPTURE_BEFORE_PANE,
+    RECAPTURE_AFTER_PANE,
+    RECAPTURE_PANE_COUNT
+};
 
 enum {
     ID_OPEN = 100, ID_NEW_FOLDER, ID_SAVE, ID_EXIT, ID_UNDO, ID_REDO,
     ID_COPY, ID_PASTE, ID_RENAME, ID_DELETE,
     ID_CLEAR_CLICK, ID_FIT, ID_ZOOM_OUT, ID_ZOOM_IN, ID_ACTUAL,
-    ID_CAPTURE_LISTEN,
+    ID_CAPTURE_LISTEN, ID_RECAPTURE_LISTEN, ID_RECAPTURE_ANNOTATIONS,
+    ID_RECAPTURE_CONFIRM, ID_RECAPTURE_CANCEL,
     ID_TOOL_SELECT, ID_TOOL_RECTANGLE, ID_TOOL_CLICK,
     ID_TREE = 200, ID_EDITOR, ID_SPLITTER_LEFT,
     ID_PROMPT_EDIT = 300, ID_PROMPT_OK, ID_PROMPT_CANCEL
@@ -78,6 +88,7 @@ typedef struct {
     HWND context_label;
     HWND tool_buttons[GOLDEN_TOOL_BUTTON_COUNT];
     HWND view_buttons[GOLDEN_VIEW_BUTTON_COUNT];
+    HWND recapture_buttons[GOLDEN_RECAPTURE_BUTTON_COUNT];
     HMENU file_menu, edit_menu, view_menu, capture_menu;
     TOOLINFOW tool_button_tooltips[GOLDEN_TOOL_BUTTON_COUNT];
     IWICImagingFactory *wic;
@@ -99,7 +110,31 @@ typedef struct {
 
     BOOL capture_hotkey_enabled;
     BOOL capture_hotkey_registered;
+    BOOL recapture_hotkey_enabled;
+    BOOL recapture_hotkey_registered;
     BOOL capture_in_progress;
+
+    BOOL recapture_review;
+    BOOL recapture_show_annotations;
+    GoldenImage recapture_image;
+    GoldenRecaptureComparison recapture_comparison;
+    wchar_t recapture_target[MAX_PATH * 4];
+    DWORD recapture_volume_serial;
+    DWORD recapture_file_index_high;
+    DWORD recapture_file_index_low;
+    FILETIME recapture_last_write;
+    DWORD recapture_file_size_high;
+    DWORD recapture_file_size_low;
+    BOOL recapture_identity_valid;
+    wchar_t recapture_notice[256];
+    double recapture_zoom[RECAPTURE_PANE_COUNT];
+    int recapture_pan_x[RECAPTURE_PANE_COUNT];
+    int recapture_pan_y[RECAPTURE_PANE_COUNT];
+    int recapture_active_pane;
+    BOOL recapture_panning;
+    int recapture_pan_pane;
+    POINT recapture_pan_start;
+    int recapture_pan_origin_x, recapture_pan_origin_y;
 
     double zoom;
     int pan_x, pan_y;
@@ -154,6 +189,11 @@ static void initialize_app_state(HINSTANCE instance) {
     g.tool = TOOL_SELECT;
     g.left_column_width = GOLDEN_RESOURCE_PANE_DEFAULT;
     g.capture_hotkey_enabled = TRUE;
+    g.recapture_hotkey_enabled = TRUE;
+    g.recapture_show_annotations = TRUE;
+    g.recapture_zoom[RECAPTURE_BEFORE_PANE] = 1.0;
+    g.recapture_zoom[RECAPTURE_AFTER_PANE] = 1.0;
+    g.recapture_active_pane = RECAPTURE_AFTER_PANE;
     g.tooltip_pending = -1;
     g.tooltip_visible = -1;
     g.hovered_tool = -1;
@@ -191,7 +231,11 @@ static void update_state_after_resource_move(GoldenHistoryKind kind,
                                              const wchar_t *source,
                                              const wchar_t *destination);
 static void capture_foreground_scene(void);
+static void recapture_foreground_scene(void);
+static void confirm_recapture(void);
+static void cancel_recapture(void);
 static void set_capture_hotkey_enabled(BOOL enabled, BOOL remember);
+static void set_recapture_hotkey_enabled(BOOL enabled, BOOL remember);
 
 static void show_error(const wchar_t *message) {
     MessageBoxW(g.main, message, APP_NAME, MB_OK | MB_ICONERROR);
@@ -224,6 +268,8 @@ static void discard_history_entry(GoldenHistoryEntry *entry, void *context) {
     }
     else if (entry->kind == GOLDEN_HISTORY_REPLACE_MOVE_PNG && entry->staged)
         delete_resource_pair(entry->auxiliary);
+    else if (entry->kind == GOLDEN_HISTORY_RECAPTURE_PNG && entry->staged)
+        DeleteFileW(entry->destination);
 }
 
 static wchar_t *dup_wide(const wchar_t *value) {
@@ -268,6 +314,17 @@ static void remember_image_identity(const wchar_t *path) {
         &g.image_file_index_low);
 }
 
+static BOOL read_file_stamp(const wchar_t *path, FILETIME *last_write,
+                            DWORD *size_high, DWORD *size_low) {
+    WIN32_FILE_ATTRIBUTE_DATA data;
+    if (!GetFileAttributesExW(path, GetFileExInfoStandard, &data) ||
+        (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) return FALSE;
+    *last_write = data.ftLastWriteTime;
+    *size_high = data.nFileSizeHigh;
+    *size_low = data.nFileSizeLow;
+    return TRUE;
+}
+
 static BOOL replace_path_prefix(wchar_t *path, size_t capacity,
                                 const wchar_t *old_prefix,
                                 const wchar_t *new_prefix) {
@@ -286,17 +343,28 @@ static BOOL replace_path_prefix(wchar_t *path, size_t capacity,
 static void update_status(void) {
     if (!g.status) return;
     wchar_t text[MAX_PATH * 4 + 96];
+    if (g.recapture_notice[0] && !g.recapture_review) {
+        _snwprintf(text, _countof(text), L"  Recapture: %s",
+                   g.recapture_notice);
+        SetWindowTextW(g.status, text);
+        return;
+    }
     const wchar_t *folder = g.current_dir[0] ? g.current_dir : g.root;
-    _snwprintf(text, _countof(text), L"  Capture folder: %s  •  F8 capture: %s",
+    _snwprintf(text, _countof(text),
+               L"  Capture folder: %s  •  F8: %s  •  F9: %s",
                folder[0] ? folder : L"(unavailable)",
-               g.capture_hotkey_enabled ? L"On" : L"Off");
+               g.capture_hotkey_enabled ? L"On" : L"Off",
+               g.recapture_hotkey_enabled ? L"On" : L"Off");
     SetWindowTextW(g.status, text);
 }
 
 static void update_context_label(void) {
     if (!g.context_label) return;
-    wchar_t text[MAX_PATH * 4 + 64];
-    if (g.resource_visible && g.image_path[0])
+    wchar_t text[MAX_PATH * 4 + 128];
+    if (g.recapture_review)
+        _snwprintf(text, _countof(text), L"  Reviewing recapture  —  %s",
+                   PathFindFileNameW(g.recapture_target));
+    else if (g.resource_visible && g.image_path[0])
         _snwprintf(text, _countof(text), L"  Editing resource  —  %s",
                    PathFindFileNameW(g.image_path));
     else
@@ -1051,6 +1119,17 @@ static void remember_capture_hotkey_setting(void) {
     }
 }
 
+static void remember_recapture_hotkey_setting(void) {
+    HKEY key;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\Goldens", 0, NULL, 0,
+                        KEY_SET_VALUE, NULL, &key, NULL) == ERROR_SUCCESS) {
+        DWORD enabled = g.recapture_hotkey_enabled ? 1u : 0u;
+        RegSetValueExW(key, L"RecaptureHotkeyEnabled", 0, REG_DWORD,
+                       (const BYTE *)&enabled, sizeof(enabled));
+        RegCloseKey(key);
+    }
+}
+
 static void load_capture_hotkey_setting(void) {
     HKEY key;
     DWORD enabled = 1, type = 0, bytes = sizeof(enabled);
@@ -1060,6 +1139,13 @@ static void load_capture_hotkey_setting(void) {
                          (BYTE *)&enabled, &bytes) == ERROR_SUCCESS &&
         type == REG_DWORD && bytes == sizeof(enabled))
         g.capture_hotkey_enabled = enabled != 0;
+    enabled = 1;
+    type = 0;
+    bytes = sizeof(enabled);
+    if (RegQueryValueExW(key, L"RecaptureHotkeyEnabled", NULL, &type,
+                         (BYTE *)&enabled, &bytes) == ERROR_SUCCESS &&
+        type == REG_DWORD && bytes == sizeof(enabled))
+        g.recapture_hotkey_enabled = enabled != 0;
     RegCloseKey(key);
 }
 
@@ -1299,12 +1385,229 @@ static void show_pending_annotation_tooltip(HWND hwnd) {
     g.tooltip_pending = -1;
 }
 
+static RECT fit_image_in_area(UINT width, UINT height, const RECT *area,
+                              double zoom, int pan_x, int pan_y,
+                              double *scale) {
+    int available_width = max(1, area->right - area->left);
+    int available_height = max(1, area->bottom - area->top);
+    double x_scale = (double)available_width / (double)width;
+    double y_scale = (double)available_height / (double)height;
+    *scale = min(x_scale, y_scale) * zoom;
+    int drawn_width = max(1, (int)((double)width * *scale));
+    int drawn_height = max(1, (int)((double)height * *scale));
+    int x = area->left + (available_width - drawn_width) / 2 + pan_x;
+    int y = area->top + (available_height - drawn_height) / 2 + pan_y;
+    return (RECT){x, y, x + drawn_width, y + drawn_height};
+}
+
+static void recapture_panel_rects(const RECT *client, RECT *before,
+                                  RECT *after) {
+    UINT dpi = GetDpiForWindow(g.editor);
+    int inset = golden_scale_ui(10, dpi);
+    int header_height = golden_scale_ui(46, dpi);
+    int footer_height = golden_scale_ui(28, dpi);
+    RECT panels = {inset, header_height, client->right - inset,
+                   client->bottom - footer_height};
+    int gap = golden_scale_ui(12, dpi);
+    int middle = (panels.left + panels.right) / 2;
+    *before = (RECT){panels.left, panels.top,
+                     middle - gap / 2, panels.bottom};
+    *after = (RECT){middle + gap / 2, panels.top,
+                    panels.right, panels.bottom};
+}
+
+static RECT recapture_panel_image_area(const RECT *panel) {
+    UINT dpi = GetDpiForWindow(g.editor);
+    RECT area = *panel;
+    area.top = min(area.bottom,
+                   area.top + golden_scale_ui(24, dpi));
+    InflateRect(&area, -golden_scale_ui(4, dpi),
+                -golden_scale_ui(4, dpi));
+    return area;
+}
+
+static int recapture_pane_at_point(POINT point) {
+    RECT client, before, after;
+    GetClientRect(g.editor, &client);
+    recapture_panel_rects(&client, &before, &after);
+    if (PtInRect(&before, point)) return RECAPTURE_BEFORE_PANE;
+    if (PtInRect(&after, point)) return RECAPTURE_AFTER_PANE;
+    return -1;
+}
+
+static RECT recapture_pane_rect(int pane) {
+    RECT client, before, after;
+    GetClientRect(g.editor, &client);
+    recapture_panel_rects(&client, &before, &after);
+    return pane == RECAPTURE_AFTER_PANE ? after : before;
+}
+
+static void select_recapture_pane(int pane) {
+    if (pane < 0 || pane >= RECAPTURE_PANE_COUNT ||
+        g.recapture_active_pane == pane) return;
+    g.recapture_active_pane = pane;
+    update_menu_availability();
+    InvalidateRect(g.editor, NULL, FALSE);
+}
+
+static void draw_recapture_annotations(HDC dc, const RECT *destination,
+                                       double scale) {
+    int saved = SaveDC(dc);
+    IntersectClipRect(dc, destination->left, destination->top,
+                     destination->right, destination->bottom);
+    for (int i = 0; i < g.annotation_count; ++i) {
+        RECT boundary = annotation_screen_rect_for_layout(
+            destination, scale, &g.annotations[i].boundary);
+        golden_draw_boundary(dc, &boundary,
+            i == g.selected ? RGB(255, 180, 0) : RGB(0, 220, 255),
+            i == g.selected ? 3 : 2, PS_SOLID);
+        if (g.annotations[i].has_click) {
+            int x = boundary.left + (int)((boundary.right - boundary.left) *
+                                          g.annotations[i].click_x);
+            int y = boundary.top + (int)((boundary.bottom - boundary.top) *
+                                         g.annotations[i].click_y);
+            golden_draw_click_mark(dc, (POINT){x, y});
+        }
+    }
+    RestoreDC(dc, saved);
+}
+
+static void draw_recapture_panel(HDC dc, const RECT *panel,
+                                 const wchar_t *name,
+                                 const GoldenImage *image,
+                                 BOOL show_annotations, int pane) {
+    UINT dpi = GetDpiForWindow(g.editor);
+    RECT label = *panel;
+    label.bottom = min(label.bottom,
+                       label.top + golden_scale_ui(24, dpi));
+    RECT area = recapture_panel_image_area(panel);
+    if (area.right <= area.left || area.bottom <= area.top) return;
+    double scale = 1.0;
+    RECT destination = fit_image_in_area(image->width, image->height,
+                                         &area, g.recapture_zoom[pane],
+                                         g.recapture_pan_x[pane],
+                                         g.recapture_pan_y[pane], &scale);
+    wchar_t text[96];
+    _snwprintf(text, _countof(text), L"%s%s   %u × %u px   %.0f%%",
+               name, pane == g.recapture_active_pane ? L"  [SELECTED]" : L"",
+               image->width, image->height, scale * 100.0);
+    SetTextColor(dc, pane == g.recapture_active_pane ? RGB(255, 190, 75) :
+                                                      RGB(235, 235, 235));
+    DrawTextW(dc, text, -1, &label,
+              DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    int saved = SaveDC(dc);
+    IntersectClipRect(dc, area.left, area.top, area.right, area.bottom);
+    golden_draw_bgra_image(dc, image->pixels, image->width, image->height,
+                           &destination, scale);
+    FrameRect(dc, &destination, (HBRUSH)GetStockObject(BLACK_BRUSH));
+    if (show_annotations)
+        draw_recapture_annotations(dc, &destination, scale);
+    RestoreDC(dc, saved);
+    golden_draw_boundary(dc, panel,
+        pane == g.recapture_active_pane ? RGB(255, 190, 75) : RGB(95, 95, 95),
+        pane == g.recapture_active_pane ? 2 : 1, PS_SOLID);
+}
+
+static void draw_recapture_review(HDC dc, const RECT *client) {
+    UINT dpi = GetDpiForWindow(g.editor);
+    int inset = golden_scale_ui(10, dpi);
+    int header_height = golden_scale_ui(46, dpi);
+    int footer_height = golden_scale_ui(28, dpi);
+    RECT warning = {inset, golden_scale_ui(5, dpi),
+                    client->right - inset, header_height};
+    wchar_t text[512];
+    BOOL warning_active = g.recapture_comparison.size_changed ||
+                          g.recapture_comparison.difference_warning ||
+                          g.recapture_notice[0];
+    if (g.recapture_notice[0]) {
+        _snwprintf(text, _countof(text), L"Recapture could not be confirmed: %s",
+                   g.recapture_notice);
+    } else if (g.recapture_comparison.size_changed) {
+        _snwprintf(text, _countof(text),
+            L"Check before replacing: size changed from %u × %u to %u × %u; visual difference %.1f%%.",
+            g.image_w, g.image_h, g.recapture_image.width,
+            g.recapture_image.height,
+            g.recapture_comparison.difference_percent);
+    } else if (g.recapture_comparison.difference_warning) {
+        _snwprintf(text, _countof(text),
+            L"Check before replacing: visual difference is %.1f%% (warning above %.0f%%).",
+            g.recapture_comparison.difference_percent,
+            GOLDEN_RECAPTURE_DIFFERENCE_WARNING_PERCENT);
+    } else {
+        _snwprintf(text, _countof(text),
+            L"Visual difference: %.1f%%. The original PNG remains unchanged until you confirm.",
+            g.recapture_comparison.difference_percent);
+    }
+    SetTextColor(dc, warning_active ? RGB(255, 255, 255) :
+                                      RGB(220, 220, 220));
+    DrawTextW(dc, text, -1, &warning,
+              DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+
+    RECT before_panel, after_panel;
+    recapture_panel_rects(client, &before_panel, &after_panel);
+    GoldenImage before = {g.pixels, g.image_w, g.image_h, g.stride};
+    draw_recapture_panel(dc, &before_panel, L"BEFORE", &before, TRUE,
+                         RECAPTURE_BEFORE_PANE);
+    draw_recapture_panel(dc, &after_panel, L"AFTER", &g.recapture_image,
+                         g.recapture_show_annotations,
+                         RECAPTURE_AFTER_PANE);
+
+    RECT footer = {inset, client->bottom - footer_height,
+                   client->right - inset, client->bottom};
+    SetTextColor(dc, RGB(205, 205, 205));
+    wcscpy(text,
+        L"Independent views  •  Click pane for Fit/−/+  •  Wheel zooms pane  •  Drag pans pane  •  Ctrl+Enter replaces  •  Esc cancels");
+    DrawTextW(dc, text, -1, &footer,
+              DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+}
+
+static void reset_recapture_view(int pane) {
+    g.recapture_zoom[pane] = 1.0;
+    g.recapture_pan_x[pane] = 0;
+    g.recapture_pan_y[pane] = 0;
+    update_menu_availability();
+    InvalidateRect(g.editor, NULL, FALSE);
+}
+
+static void recapture_zoom_by(int pane, double factor, const POINT *anchor) {
+    double next = min(8.0, max(1.0, g.recapture_zoom[pane] * factor));
+    if (next == g.recapture_zoom[pane]) return;
+    double change = next / g.recapture_zoom[pane];
+    if (next == 1.0) {
+        g.recapture_pan_x[pane] = 0;
+        g.recapture_pan_y[pane] = 0;
+    } else if (anchor) {
+        RECT panel = recapture_pane_rect(pane);
+        RECT area = recapture_panel_image_area(&panel);
+        int center_x = (area.left + area.right) / 2;
+        int center_y = (area.top + area.bottom) / 2;
+        double offset_x = (double)(anchor->x - center_x);
+        double offset_y = (double)(anchor->y - center_y);
+        g.recapture_pan_x[pane] = (int)(offset_x -
+            (offset_x - (double)g.recapture_pan_x[pane]) * change);
+        g.recapture_pan_y[pane] = (int)(offset_y -
+            (offset_y - (double)g.recapture_pan_y[pane]) * change);
+    } else {
+        g.recapture_pan_x[pane] =
+            (int)((double)g.recapture_pan_x[pane] * change);
+        g.recapture_pan_y[pane] =
+            (int)((double)g.recapture_pan_y[pane] * change);
+    }
+    g.recapture_zoom[pane] = next;
+    update_menu_availability();
+    InvalidateRect(g.editor, NULL, FALSE);
+}
+
 static void draw_editor(HWND hwnd, HDC dc) {
     RECT client;
     GetClientRect(hwnd, &client);
     FillRect(dc, &client, (HBRUSH)(COLOR_APPWORKSPACE + 1));
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, RGB(230, 230, 230));
+    if (g.recapture_review) {
+        draw_recapture_review(dc, &client);
+        return;
+    }
     BYTE *pixels = active_pixels();
     UINT image_w = active_width(), image_h = active_height();
     if (!pixels) {
@@ -1422,17 +1725,56 @@ static void set_editor_cursor(void) {
     SetCursor(LoadCursorW(NULL, cursor));
 }
 
+static void begin_recapture_pan(HWND hwnd, POINT client) {
+    int pane = recapture_pane_at_point(client);
+    if (pane < 0) return;
+    select_recapture_pane(pane);
+    if (g.recapture_zoom[pane] <= 1.0) return;
+    g.recapture_panning = TRUE;
+    g.recapture_pan_pane = pane;
+    g.recapture_pan_start = client;
+    g.recapture_pan_origin_x = g.recapture_pan_x[pane];
+    g.recapture_pan_origin_y = g.recapture_pan_y[pane];
+    SetCapture(hwnd);
+    SetCursor(LoadCursorW(NULL, IDC_SIZEALL));
+}
+
+static void end_recapture_pan(HWND hwnd) {
+    if (!g.recapture_panning) return;
+    g.recapture_panning = FALSE;
+    if (GetCapture() == hwnd) ReleaseCapture();
+    SetCursor(LoadCursorW(NULL,
+        g.recapture_zoom[g.recapture_active_pane] > 1.0 ?
+            IDC_SIZEALL : IDC_ARROW));
+}
+
 static LRESULT CALLBACK EditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
     case WM_PAINT: paint_editor(hwnd); return 0;
     case WM_ERASEBKGND: return 1;
     case WM_SETCURSOR:
         if (LOWORD(lp) == HTCLIENT) {
+            if (g.recapture_review) {
+                POINT client;
+                GetCursorPos(&client);
+                ScreenToClient(hwnd, &client);
+                int pane = recapture_pane_at_point(client);
+                SetCursor(LoadCursorW(NULL,
+                    pane >= 0 && g.recapture_zoom[pane] > 1.0 ?
+                        IDC_SIZEALL : IDC_ARROW));
+                return TRUE;
+            }
             set_editor_cursor();
             return TRUE;
         }
         break;
     case WM_LBUTTONDOWN: {
+        if (g.recapture_review) {
+            SetFocus(hwnd);
+            begin_recapture_pan(hwnd,
+                (POINT){GET_X_LPARAM(lp), GET_Y_LPARAM(lp)});
+            return 0;
+        }
         hide_annotation_tooltip(hwnd);
         SetFocus(hwnd);
         POINT client = {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)}, image;
@@ -1489,6 +1831,17 @@ static LRESULT CALLBACK EditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     }
     case WM_MOUSEMOVE:
+        if (g.recapture_review) {
+            if (g.recapture_panning) {
+                int pane = g.recapture_pan_pane;
+                g.recapture_pan_x[pane] = g.recapture_pan_origin_x +
+                    GET_X_LPARAM(lp) - g.recapture_pan_start.x;
+                g.recapture_pan_y[pane] = g.recapture_pan_origin_y +
+                    GET_Y_LPARAM(lp) - g.recapture_pan_start.y;
+                InvalidateRect(hwnd, NULL, FALSE);
+            }
+            return 0;
+        }
         update_annotation_hover(hwnd,
             (POINT){GET_X_LPARAM(lp), GET_Y_LPARAM(lp)});
         if (g.panning) {
@@ -1534,6 +1887,10 @@ static LRESULT CALLBACK EditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         break;
     case WM_LBUTTONUP:
+        if (g.recapture_review) {
+            end_recapture_pan(hwnd);
+            return 0;
+        }
         if (g.panning) {
             g.panning = FALSE;
             ReleaseCapture();
@@ -1567,6 +1924,11 @@ static LRESULT CALLBACK EditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         return 0;
     case WM_MBUTTONDOWN:
+        if (g.recapture_review) {
+            begin_recapture_pan(hwnd,
+                (POINT){GET_X_LPARAM(lp), GET_Y_LPARAM(lp)});
+            return 0;
+        }
         g.panning = TRUE;
         g.pan_start = (POINT){GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
         g.pan_origin_x = g.pan_x; g.pan_origin_y = g.pan_y;
@@ -1574,6 +1936,10 @@ static LRESULT CALLBACK EditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         set_editor_cursor();
         return 0;
     case WM_MBUTTONUP:
+        if (g.recapture_review) {
+            end_recapture_pan(hwnd);
+            return 0;
+        }
         if (g.panning) {
             g.panning = FALSE;
             ReleaseCapture();
@@ -1583,13 +1949,38 @@ static LRESULT CALLBACK EditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_MOUSEWHEEL: {
         POINT anchor = {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
         ScreenToClient(hwnd, &anchor);
+        if (g.recapture_review) {
+            int pane = recapture_pane_at_point(anchor);
+            if (pane >= 0) {
+                select_recapture_pane(pane);
+                recapture_zoom_by(pane,
+                    GET_WHEEL_DELTA_WPARAM(wp) > 0 ? 1.25 : 0.8,
+                    &anchor);
+            }
+            return 0;
+        }
         zoom_by(GET_WHEEL_DELTA_WPARAM(wp) > 0 ? 1.25 : 0.8, &anchor);
         return 0;
     }
     case WM_LBUTTONDBLCLK:
+        if (g.recapture_review) return 0;
         if (g.tool == TOOL_SELECT) rename_selected();
         return 0;
     case WM_KEYDOWN:
+        if (g.recapture_review) {
+            if (wp == VK_ESCAPE) cancel_recapture();
+            else if (wp == VK_RETURN && GetKeyState(VK_CONTROL) < 0)
+                confirm_recapture();
+            else if (wp == 'A') {
+                g.recapture_show_annotations =
+                    !g.recapture_show_annotations;
+                SetWindowTextW(g.recapture_buttons[0],
+                    g.recapture_show_annotations ?
+                        L"Annotations: On" : L"Annotations: Off");
+                InvalidateRect(hwnd, NULL, FALSE);
+            }
+            return 0;
+        }
         if (wp == VK_DELETE) delete_selected();
         else if (wp == VK_F2) rename_selected();
         else if (wp == 'Z' && GetKeyState(VK_CONTROL) < 0) undo_action();
@@ -1598,6 +1989,7 @@ static LRESULT CALLBACK EditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         else if (wp == '1') { g.zoom = 1.0; g.pan_x = g.pan_y = 0; InvalidateRect(hwnd, NULL, FALSE); }
         return 0;
     case WM_CAPTURECHANGED:
+        g.recapture_panning = FALSE;
         g.panning = FALSE;
         g.drag_mode = 0;
         g.drawing = FALSE;
@@ -1680,6 +2072,34 @@ static void set_menu_command_enabled(HMENU menu, UINT command, BOOL enabled) {
 }
 
 static void update_menu_availability(void) {
+    if (g.recapture_review) {
+        set_menu_command_enabled(g.file_menu, ID_OPEN, FALSE);
+        set_menu_command_enabled(g.file_menu, ID_NEW_FOLDER, FALSE);
+        set_menu_command_enabled(g.file_menu, ID_SAVE, FALSE);
+        set_menu_command_enabled(g.edit_menu, ID_UNDO, FALSE);
+        set_menu_command_enabled(g.edit_menu, ID_REDO, FALSE);
+        set_menu_command_enabled(g.edit_menu, ID_COPY, FALSE);
+        set_menu_command_enabled(g.edit_menu, ID_PASTE, FALSE);
+        set_menu_command_enabled(g.edit_menu, ID_RENAME, FALSE);
+        set_menu_command_enabled(g.edit_menu, ID_DELETE, FALSE);
+        set_menu_command_enabled(g.edit_menu, ID_CLEAR_CLICK, FALSE);
+        set_menu_command_enabled(g.view_menu, ID_FIT, TRUE);
+        set_menu_command_enabled(g.view_menu, ID_ZOOM_OUT,
+            g.recapture_zoom[g.recapture_active_pane] > 1.0);
+        set_menu_command_enabled(g.view_menu, ID_ZOOM_IN,
+            g.recapture_zoom[g.recapture_active_pane] < 8.0);
+        set_menu_command_enabled(g.view_menu, ID_ACTUAL, FALSE);
+        if (g.view_buttons[0]) {
+            EnableWindow(g.view_buttons[0], TRUE);
+            EnableWindow(g.view_buttons[1],
+                g.recapture_zoom[g.recapture_active_pane] > 1.0);
+            EnableWindow(g.view_buttons[2],
+                g.recapture_zoom[g.recapture_active_pane] < 8.0);
+        }
+        set_menu_command_enabled(g.capture_menu, ID_CAPTURE_LISTEN, FALSE);
+        set_menu_command_enabled(g.capture_menu, ID_RECAPTURE_LISTEN, FALSE);
+        return;
+    }
     DWORD root_attributes = g.root[0] ? GetFileAttributesW(g.root) :
                                        INVALID_FILE_ATTRIBUTES;
     BOOL root_available = root_attributes != INVALID_FILE_ATTRIBUTES &&
@@ -1718,11 +2138,21 @@ static void update_menu_availability(void) {
     set_menu_command_enabled(g.view_menu, ID_ZOOM_OUT, image_available);
     set_menu_command_enabled(g.view_menu, ID_ZOOM_IN, image_available);
     set_menu_command_enabled(g.view_menu, ID_ACTUAL, image_available);
+    if (g.view_buttons[0]) {
+        for (int i = 0; i < GOLDEN_VIEW_BUTTON_COUNT; ++i)
+            EnableWindow(g.view_buttons[i], image_available);
+    }
     set_menu_command_enabled(g.capture_menu, ID_CAPTURE_LISTEN,
+                             !g.capture_in_progress);
+    set_menu_command_enabled(g.capture_menu, ID_RECAPTURE_LISTEN,
                              !g.capture_in_progress);
     if (g.capture_menu)
         CheckMenuItem(g.capture_menu, ID_CAPTURE_LISTEN,
                       MF_BYCOMMAND | (g.capture_hotkey_enabled ?
+                                      MF_CHECKED : MF_UNCHECKED));
+    if (g.capture_menu)
+        CheckMenuItem(g.capture_menu, ID_RECAPTURE_LISTEN,
+                      MF_BYCOMMAND | (g.recapture_hotkey_enabled ?
                                       MF_CHECKED : MF_UNCHECKED));
 }
 
@@ -2071,6 +2501,55 @@ static BOOL apply_resource_history(GoldenHistoryEntry *entry, BOOL undo) {
             }
             select_resource_after_refresh(parent[0] ? parent : g.root);
         }
+        return TRUE;
+    }
+
+    if (entry->kind == GOLDEN_HISTORY_RECAPTURE_PNG) {
+        wchar_t current_backup[MAX_PATH * 4];
+        if (!make_history_temporary_path(
+                L".png", current_backup, _countof(current_backup)) ||
+            !golden_atomic_copy_file(entry->source, current_backup)) {
+            show_error(L"Goldens could not preserve the current PNG while applying recapture history.");
+            return FALSE;
+        }
+        GoldenImage replacement = {0};
+        if (!golden_png_load(g.wic, entry->destination, &replacement)) {
+            DeleteFileW(current_backup);
+            show_error(L"The stored recapture version could not be decoded.");
+            return FALSE;
+        }
+        if (!golden_atomic_copy_file(entry->destination, entry->source)) {
+            golden_image_free(&replacement);
+            DeleteFileW(current_backup);
+            show_error(L"Goldens could not apply the stored recapture version; the current PNG is unchanged.");
+            return FALSE;
+        }
+        DeleteFileW(entry->destination);
+        if (!golden_path_copy(current_backup, entry->destination,
+                              _countof(entry->destination))) {
+            golden_image_free(&replacement);
+            return FALSE;
+        }
+        entry->staged = TRUE;
+        if (!_wcsicmp(g.image_path, entry->source)) {
+            free(g.pixels);
+            g.pixels = replacement.pixels;
+            g.image_w = replacement.width;
+            g.image_h = replacement.height;
+            g.stride = replacement.stride;
+            replacement = (GoldenImage){0};
+            g.resource_visible = TRUE;
+            ++g.image_revision;
+            g.zoom = 0.0;
+            g.pan_x = g.pan_y = 0;
+            remember_image_identity(g.image_path);
+            update_context_label();
+            update_status();
+            update_tool_availability();
+            InvalidateRect(g.editor, NULL, FALSE);
+        }
+        golden_image_free(&replacement);
+        select_resource_after_refresh(entry->source);
         return TRUE;
     }
 
@@ -2609,6 +3088,19 @@ static const wchar_t *scene_capture_error(GoldenSceneCaptureStatus status) {
     }
 }
 
+static void restore_goldens_after_capture(void) {
+    ShowWindow(g.main, SW_RESTORE);
+    SetForegroundWindow(g.main);
+}
+
+static void set_recapture_notice(const wchar_t *message) {
+    wcsncpy(g.recapture_notice, message ? message : L"",
+            _countof(g.recapture_notice) - 1);
+    g.recapture_notice[_countof(g.recapture_notice) - 1] = 0;
+    update_status();
+    if (g.recapture_review) InvalidateRect(g.editor, NULL, FALSE);
+}
+
 static void set_capture_hotkey_enabled(BOOL enabled, BOOL remember) {
     if (enabled && !g.capture_hotkey_registered) {
         if (RegisterHotKey(g.main, CAPTURE_HOTKEY_ID,
@@ -2617,7 +3109,7 @@ static void set_capture_hotkey_enabled(BOOL enabled, BOOL remember) {
             g.capture_hotkey_registered = TRUE;
         } else {
             enabled = FALSE;
-            show_error(L"F8 is already in use, so background capture was turned off.");
+            show_error(L"F8 is already in use, so new-capture listening was turned off.");
         }
     } else if (!enabled && g.capture_hotkey_registered) {
         UnregisterHotKey(g.main, CAPTURE_HOTKEY_ID);
@@ -2631,10 +3123,34 @@ static void set_capture_hotkey_enabled(BOOL enabled, BOOL remember) {
     if (remember) remember_capture_hotkey_setting();
 }
 
+static void set_recapture_hotkey_enabled(BOOL enabled, BOOL remember) {
+    if (enabled && !g.recapture_hotkey_registered) {
+        if (RegisterHotKey(g.main, RECAPTURE_HOTKEY_ID,
+                           CAPTURE_HOTKEY_MODIFIERS,
+                           RECAPTURE_HOTKEY_KEY)) {
+            g.recapture_hotkey_registered = TRUE;
+        } else {
+            enabled = FALSE;
+            show_error(L"F9 is already in use, so recapture listening was turned off.");
+        }
+    } else if (!enabled && g.recapture_hotkey_registered) {
+        UnregisterHotKey(g.main, RECAPTURE_HOTKEY_ID);
+        g.recapture_hotkey_registered = FALSE;
+    }
+    g.recapture_hotkey_enabled = enabled;
+    if (g.capture_menu)
+        CheckMenuItem(g.capture_menu, ID_RECAPTURE_LISTEN,
+                      MF_BYCOMMAND | (enabled ? MF_CHECKED : MF_UNCHECKED));
+    update_status();
+    if (remember) remember_recapture_hotkey_setting();
+}
+
 static void capture_foreground_scene(void) {
-    if (!g.capture_hotkey_registered || g.capture_in_progress) return;
+    if (!g.capture_hotkey_registered || g.capture_in_progress ||
+        g.recapture_review) return;
+    g.recapture_notice[0] = 0;
     HWND foreground = GetForegroundWindow();
-    if (!foreground || foreground == g.main) return;
+    if (!foreground) return;
 
     const wchar_t *selected_directory = selected_directory_path();
     if (!selected_directory && g.root[0]) selected_directory = g.root;
@@ -2682,6 +3198,185 @@ static void capture_foreground_scene(void) {
     update_status();
     update_menu_availability();
     if (item) begin_tree_rename(item);
+    MessageBeep(MB_OK);
+}
+
+static void recapture_foreground_scene(void) {
+    if (!g.recapture_hotkey_registered || g.capture_in_progress ||
+        g.recapture_review) return;
+    HWND foreground = GetForegroundWindow();
+    if (!foreground) return;
+
+    if (!g.resource_visible || !g.image_path[0] ||
+        !selected_active_resource_node()) {
+        set_recapture_notice(
+            L"Select the PNG to replace before pressing F9.");
+        return;
+    }
+
+    wchar_t target[MAX_PATH * 4];
+    DWORD target_volume = 0, target_high = 0, target_low = 0;
+    FILETIME target_last_write = {0};
+    DWORD target_size_high = 0, target_size_low = 0;
+    if (!golden_path_copy(g.image_path, target, _countof(target)) ||
+        !read_file_identity(target, &target_volume,
+                            &target_high, &target_low) ||
+        !read_file_stamp(target, &target_last_write,
+                         &target_size_high, &target_size_low)) {
+        set_recapture_notice(
+            L"The selected PNG is not available for a safe recapture.");
+        return;
+    }
+
+    g.capture_in_progress = TRUE;
+    g.recapture_notice[0] = 0;
+    GoldenImage captured = {0};
+    GoldenSceneCaptureStatus status = golden_capture_scene_image(
+        foreground, &captured, NULL);
+    g.capture_in_progress = FALSE;
+    if (status != GOLDEN_SCENE_CAPTURE_OK) {
+        set_recapture_notice(scene_capture_error(status));
+        update_menu_availability();
+        return;
+    }
+
+    GoldenImage before = {g.pixels, g.image_w, g.image_h, g.stride};
+    GoldenRecaptureComparison comparison = {0};
+    if (!golden_compare_recapture(&before, &captured, &comparison) ||
+        !golden_path_copy(target, g.recapture_target,
+                          _countof(g.recapture_target))) {
+        golden_image_free(&captured);
+        set_recapture_notice(L"The captured image could not be prepared for review.");
+        update_menu_availability();
+        return;
+    }
+
+    restore_goldens_after_capture();
+    g.recapture_image = captured;
+    g.recapture_comparison = comparison;
+    g.recapture_show_annotations = TRUE;
+    g.recapture_volume_serial = target_volume;
+    g.recapture_file_index_high = target_high;
+    g.recapture_file_index_low = target_low;
+    g.recapture_last_write = target_last_write;
+    g.recapture_file_size_high = target_size_high;
+    g.recapture_file_size_low = target_size_low;
+    g.recapture_identity_valid = TRUE;
+    for (int pane = 0; pane < RECAPTURE_PANE_COUNT; ++pane) {
+        g.recapture_zoom[pane] = 1.0;
+        g.recapture_pan_x[pane] = 0;
+        g.recapture_pan_y[pane] = 0;
+    }
+    g.recapture_active_pane = RECAPTURE_AFTER_PANE;
+    g.recapture_panning = FALSE;
+    g.recapture_review = TRUE;
+    hide_annotation_tooltip(g.editor);
+    update_context_label();
+    update_tool_availability();
+    layout_children(g.main);
+    SetWindowTextW(g.recapture_buttons[0], L"Annotations: On");
+    SetFocus(g.recapture_buttons[2]);
+    InvalidateRect(g.editor, NULL, FALSE);
+    MessageBeep(MB_OK);
+}
+
+static void cancel_recapture(void) {
+    if (!g.recapture_review) return;
+    end_recapture_pan(g.editor);
+    golden_image_free(&g.recapture_image);
+    g.recapture_review = FALSE;
+    g.recapture_target[0] = 0;
+    g.recapture_identity_valid = FALSE;
+    g.recapture_notice[0] = 0;
+    update_context_label();
+    update_status();
+    update_tool_availability();
+    layout_children(g.main);
+    SetFocus(g.editor);
+    InvalidateRect(g.editor, NULL, FALSE);
+}
+
+static BOOL recapture_target_unchanged(void) {
+    if (_wcsicmp(g.image_path, g.recapture_target) ||
+        GetFileAttributesW(g.recapture_target) == INVALID_FILE_ATTRIBUTES)
+        return FALSE;
+    if (!g.recapture_identity_valid) return TRUE;
+    DWORD volume = 0, high = 0, low = 0;
+    FILETIME last_write = {0};
+    DWORD size_high = 0, size_low = 0;
+    return read_file_identity(g.recapture_target, &volume, &high, &low) &&
+           read_file_stamp(g.recapture_target, &last_write,
+                           &size_high, &size_low) &&
+           volume == g.recapture_volume_serial &&
+           high == g.recapture_file_index_high &&
+           low == g.recapture_file_index_low &&
+           CompareFileTime(&last_write, &g.recapture_last_write) == 0 &&
+           size_high == g.recapture_file_size_high &&
+           size_low == g.recapture_file_size_low;
+}
+
+static void confirm_recapture(void) {
+    if (!g.recapture_review) return;
+    g.recapture_notice[0] = 0;
+    if (!recapture_target_unchanged()) {
+        set_recapture_notice(
+            L"the selected PNG changed on disk during review; cancel and capture it again");
+        return;
+    }
+
+    wchar_t confirmation[MAX_PATH * 4 + 192];
+    _snwprintf(confirmation, _countof(confirmation),
+        L"Replace \"%s\" with the reviewed capture?\n\n"
+        L"Its annotation sidecar will be preserved, and the PNG replacement "
+        L"can be undone.",
+        PathFindFileNameW(g.recapture_target));
+    if (MessageBoxW(g.main, confirmation, L"Confirm recapture",
+                    MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON1) != IDYES)
+        return;
+
+    wchar_t backup[MAX_PATH * 4];
+    if (!make_history_temporary_path(L".png", backup, _countof(backup)) ||
+        !golden_atomic_copy_file(g.recapture_target, backup)) {
+        set_recapture_notice(
+            L"recoverable undo storage for the original PNG could not be created");
+        return;
+    }
+    if (!save_png_pixels(g.recapture_target, g.recapture_image.pixels,
+                         g.recapture_image.width, g.recapture_image.height,
+                         g.recapture_image.stride)) {
+        DeleteFileW(backup);
+        set_recapture_notice(
+            L"the new PNG could not be written; the original is unchanged");
+        return;
+    }
+
+    GoldenHistoryEntry entry;
+    golden_history_entry_resource(&entry, GOLDEN_HISTORY_RECAPTURE_PNG,
+                                  g.recapture_target, backup, NULL);
+    entry.staged = TRUE;
+    golden_history_push_new(&g.history, &entry);
+
+    end_recapture_pan(g.editor);
+    free(g.pixels);
+    g.pixels = g.recapture_image.pixels;
+    g.image_w = g.recapture_image.width;
+    g.image_h = g.recapture_image.height;
+    g.stride = g.recapture_image.stride;
+    g.recapture_image = (GoldenImage){0};
+    ++g.image_revision;
+    g.recapture_review = FALSE;
+    g.recapture_target[0] = 0;
+    g.recapture_identity_valid = FALSE;
+    g.recapture_notice[0] = 0;
+    g.zoom = 0.0;
+    g.pan_x = g.pan_y = 0;
+    remember_image_identity(g.image_path);
+    update_context_label();
+    update_status();
+    update_tool_availability();
+    layout_children(g.main);
+    SetFocus(g.editor);
+    InvalidateRect(g.editor, NULL, FALSE);
     MessageBeep(MB_OK);
 }
 
@@ -2872,6 +3567,14 @@ static void layout_children(HWND hwnd) {
         client.right, client.bottom, GetDpiForWindow(hwnd),
         g.left_column_width, g.left_collapsed);
     ShowWindow(g.tree, g.left_collapsed ? SW_HIDE : SW_SHOWNA);
+    EnableWindow(g.tree, !g.recapture_review);
+    for (int i = 0; i < GOLDEN_TOOL_BUTTON_COUNT; ++i)
+        ShowWindow(g.tool_buttons[i], g.recapture_review ? SW_HIDE : SW_SHOWNA);
+    for (int i = 0; i < GOLDEN_VIEW_BUTTON_COUNT; ++i)
+        ShowWindow(g.view_buttons[i], SW_SHOWNA);
+    for (int i = 0; i < GOLDEN_RECAPTURE_BUTTON_COUNT; ++i)
+        ShowWindow(g.recapture_buttons[i],
+                   g.recapture_review ? SW_SHOWNA : SW_HIDE);
 #define PLACE_CONTROL(control, rectangle) \
     SetWindowPos((control), NULL, (rectangle).left, (rectangle).top, \
         (rectangle).right - (rectangle).left, (rectangle).bottom - (rectangle).top, \
@@ -2880,10 +3583,14 @@ static void layout_children(HWND hwnd) {
     PLACE_CONTROL(g.left_splitter, layout.left_splitter);
     for (int i = 0; i < GOLDEN_TOOL_BUTTON_COUNT; ++i)
         PLACE_CONTROL(g.tool_buttons[i], layout.tool_buttons[i]);
-    PLACE_CONTROL(g.context_label, layout.context_label);
+    PLACE_CONTROL(g.context_label, g.recapture_review ?
+        layout.recapture_context_label : layout.context_label);
     PLACE_CONTROL(g.editor, layout.editor);
     for (int i = 0; i < GOLDEN_VIEW_BUTTON_COUNT; ++i)
-        PLACE_CONTROL(g.view_buttons[i], layout.view_buttons[i]);
+        PLACE_CONTROL(g.view_buttons[i], g.recapture_review ?
+            layout.recapture_view_buttons[i] : layout.view_buttons[i]);
+    for (int i = 0; i < GOLDEN_RECAPTURE_BUTTON_COUNT; ++i)
+        PLACE_CONTROL(g.recapture_buttons[i], layout.recapture_buttons[i]);
     PLACE_CONTROL(g.status, layout.status);
 #undef PLACE_CONTROL
     RedrawWindow(hwnd, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
@@ -2917,7 +3624,8 @@ static void set_tool(ToolMode tool) {
 
 static void update_tool_availability(void) {
     BOOL active_resource_selected = selected_active_resource_node() != NULL;
-    BOOL resource_selected = g.resource_visible && active_resource_selected;
+    BOOL resource_selected = !g.recapture_review && g.resource_visible &&
+                             active_resource_selected;
     if (!g.tool_buttons[0]) {
         update_menu_availability();
         return;
@@ -2969,6 +3677,28 @@ static void zoom_by(double factor, const POINT *anchor) {
 }
 
 static void handle_command(int id) {
+    if (g.recapture_review) {
+        if (id == ID_RECAPTURE_CONFIRM) confirm_recapture();
+        else if (id == ID_RECAPTURE_CANCEL) cancel_recapture();
+        else if (id == ID_RECAPTURE_ANNOTATIONS) {
+            g.recapture_show_annotations = !g.recapture_show_annotations;
+            SetWindowTextW(g.recapture_buttons[0],
+                g.recapture_show_annotations ?
+                    L"Annotations: On" : L"Annotations: Off");
+            InvalidateRect(g.editor, NULL, FALSE);
+        } else if (id == ID_FIT)
+            reset_recapture_view(g.recapture_active_pane);
+        else if (id == ID_ZOOM_OUT)
+            recapture_zoom_by(g.recapture_active_pane, 0.8, NULL);
+        else if (id == ID_ZOOM_IN)
+            recapture_zoom_by(g.recapture_active_pane, 1.25, NULL);
+        else if (id == ID_EXIT) SendMessageW(g.main, WM_CLOSE, 0, 0);
+        return;
+    } else if (id == ID_RECAPTURE_CONFIRM ||
+               id == ID_RECAPTURE_CANCEL ||
+               id == ID_RECAPTURE_ANNOTATIONS) {
+        return;
+    }
     switch (id) {
     case ID_OPEN: open_folder(); break;
     case ID_NEW_FOLDER: if (g.root[0]) create_folder(); break;
@@ -3022,6 +3752,9 @@ static void handle_command(int id) {
     case ID_CAPTURE_LISTEN:
         set_capture_hotkey_enabled(!g.capture_hotkey_enabled, TRUE);
         break;
+    case ID_RECAPTURE_LISTEN:
+        set_recapture_hotkey_enabled(!g.recapture_hotkey_enabled, TRUE);
+        break;
     case ID_TOOL_SELECT: set_tool(TOOL_SELECT); break;
     case ID_TOOL_RECTANGLE: set_tool(TOOL_RECTANGLE); break;
     case ID_TOOL_CLICK: set_tool(TOOL_CLICK); break;
@@ -3056,6 +3789,9 @@ static HMENU create_main_menu(void) {
     AppendMenuW(capture, MF_STRING | (g.capture_hotkey_enabled ?
                 MF_CHECKED : MF_UNCHECKED), ID_CAPTURE_LISTEN,
                 L"Listen for F8");
+    AppendMenuW(capture, MF_STRING | (g.recapture_hotkey_enabled ?
+                MF_CHECKED : MF_UNCHECKED), ID_RECAPTURE_LISTEN,
+                L"Listen for F9");
     g.file_menu = file;
     g.edit_menu = edit;
     g.view_menu = view;
@@ -3068,6 +3804,10 @@ static HMENU create_main_menu(void) {
 }
 
 static void activate_resource_node(ResourceTreeNode *node) {
+    if (!g.recapture_review && g.recapture_notice[0]) {
+        g.recapture_notice[0] = 0;
+        update_status();
+    }
     if (node && node->kind == RESOURCE_DIRECTORY && node->path) {
         if (!golden_path_copy(node->path, g.current_dir,
                               _countof(g.current_dir))) return;
@@ -3140,6 +3880,18 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             g.view_buttons[i] = CreateWindowW(L"BUTTON", view_labels[i],
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd,
                 (HMENU)(INT_PTR)view_ids[i], g.instance, NULL);
+        const wchar_t *recapture_labels[] = {
+            L"Annotations: On", L"Replace PNG", L"Cancel"};
+        const int recapture_ids[] = {
+            ID_RECAPTURE_ANNOTATIONS, ID_RECAPTURE_CONFIRM,
+            ID_RECAPTURE_CANCEL};
+        for (int i = 0; i < GOLDEN_RECAPTURE_BUTTON_COUNT; ++i) {
+            DWORD style = WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON;
+            if (i == 2) style |= BS_DEFPUSHBUTTON;
+            g.recapture_buttons[i] = CreateWindowW(
+                L"BUTTON", recapture_labels[i], style, 0, 0, 0, 0, hwnd,
+                (HMENU)(INT_PTR)recapture_ids[i], g.instance, NULL);
+        }
         g.tree = CreateWindowExW(WS_EX_CLIENTEDGE, WC_TREEVIEWW, NULL,
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | TVS_HASBUTTONS | TVS_HASLINES |
             TVS_LINESATROOT | TVS_SHOWSELALWAYS | TVS_EDITLABELS, 0, 0, 0, 0, hwnd,
@@ -3176,6 +3928,7 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         update_status();
         update_tool_availability();
         set_capture_hotkey_enabled(g.capture_hotkey_enabled, TRUE);
+        set_recapture_hotkey_enabled(g.recapture_hotkey_enabled, TRUE);
         AddClipboardFormatListener(hwnd);
         return 0;
     }
@@ -3195,7 +3948,8 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_TIMER:
         if (wp == RESOURCE_TREE_TIMER) {
-            if (g.resource_dragging || TreeView_GetEditControl(g.tree)) {
+            if (g.recapture_review || g.resource_dragging ||
+                TreeView_GetEditControl(g.tree)) {
                 if (!SetTimer(hwnd, RESOURCE_TREE_TIMER,
                               RESOURCE_TREE_COALESCE_MS, NULL))
                     PostMessageW(hwnd, WM_TIMER, RESOURCE_TREE_TIMER, 0);
@@ -3239,6 +3993,10 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             capture_foreground_scene();
             return 0;
         }
+        if (wp == RECAPTURE_HOTKEY_ID) {
+            recapture_foreground_scene();
+            return 0;
+        }
         break;
     case WM_MOUSEMOVE:
         if (g.resource_dragging) {
@@ -3267,6 +4025,7 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if ((HWND)lp == g.context_label) {
             SetBkMode((HDC)wp, TRANSPARENT);
             SetTextColor((HDC)wp,
+                         g.recapture_review ? RGB(150, 92, 0) :
                          g.resource_visible && g.image_path[0] ? RGB(0, 105, 145) :
                          GetSysColor(COLOR_BTNTEXT));
             return (LRESULT)GetSysColorBrush(COLOR_BTNFACE);
@@ -3281,6 +4040,10 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             wp ? RESOURCE_TREE_RETRY_MS : RESOURCE_TREE_COALESCE_MS);
         return 0;
     case WM_RESOURCES_CHANGED: {
+        if (g.recapture_review) {
+            schedule_resource_refresh(RESOURCE_TREE_COALESCE_MS);
+            return 0;
+        }
         refresh_resources();
         HTREEITEM rename_item = NULL;
         if (g.pending_resource_selection[0]) {
@@ -3409,11 +4172,14 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     }
     case WM_CLOSE:
+        if (g.recapture_review) cancel_recapture();
         if (maybe_save()) DestroyWindow(hwnd);
         return 0;
     case WM_DESTROY:
         if (g.capture_hotkey_registered)
             UnregisterHotKey(hwnd, CAPTURE_HOTKEY_ID);
+        if (g.recapture_hotkey_registered)
+            UnregisterHotKey(hwnd, RECAPTURE_HOTKEY_ID);
         RemoveClipboardFormatListener(hwnd);
         cancel_resource_drag();
         KillTimer(hwnd, RESOURCE_TREE_TIMER);
@@ -3427,6 +4193,7 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             g.tool_tooltip = NULL;
         }
         free_tree_item(g.tree, TreeView_GetRoot(g.tree));
+        golden_image_free(&g.recapture_image);
         clear_image();
         golden_history_destroy(&g.history);
         PostQuitMessage(0);
@@ -3495,7 +4262,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR command_line, 
         {FVIRTKEY | FCONTROL, VK_OEM_MINUS, ID_ZOOM_OUT},
         {FVIRTKEY | FCONTROL, VK_OEM_PLUS, ID_ZOOM_IN},
         {FVIRTKEY | FCONTROL, VK_SUBTRACT, ID_ZOOM_OUT},
-        {FVIRTKEY | FCONTROL, VK_ADD, ID_ZOOM_IN}
+        {FVIRTKEY | FCONTROL, VK_ADD, ID_ZOOM_IN},
+        {FVIRTKEY | FCONTROL, VK_RETURN, ID_RECAPTURE_CONFIRM},
+        {FVIRTKEY, VK_ESCAPE, ID_RECAPTURE_CANCEL}
     };
     HACCEL accelerators = CreateAcceleratorTableW(shortcuts, _countof(shortcuts));
     MSG msg;
@@ -3503,7 +4272,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR command_line, 
         HWND tree_edit = TreeView_GetEditControl(g.tree);
         BOOL editing_shortcut = tree_edit && msg.hwnd == tree_edit &&
             msg.message == WM_KEYDOWN &&
-            (msg.wParam == VK_DELETE ||
+            (msg.wParam == VK_DELETE || msg.wParam == VK_ESCAPE ||
              (GetKeyState(VK_CONTROL) < 0 &&
               (msg.wParam == 'C' || msg.wParam == 'V' ||
                msg.wParam == 'Z' || msg.wParam == 'Y')));

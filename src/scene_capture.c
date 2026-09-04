@@ -163,12 +163,10 @@ GoldenSceneCaptureStatus golden_capture_scene(
         GetFileAttributesW(json_path) != INVALID_FILE_ATTRIBUTES)
         return GOLDEN_SCENE_CAPTURE_DESTINATION_EXISTS;
 
-    RECT bounds = {0};
-    if (!collect_scene_bounds(foreground, &bounds))
-        return GOLDEN_SCENE_CAPTURE_NO_VISIBLE_WINDOWS;
     GoldenImage image = {0};
-    if (!capture_screen_rect(&bounds, &image))
-        return GOLDEN_SCENE_CAPTURE_SCREEN_FAILED;
+    GoldenSceneCaptureStatus status = golden_capture_scene_image(
+        foreground, &image, captured_bounds);
+    if (status != GOLDEN_SCENE_CAPTURE_OK) return status;
 
     static const char empty_annotations[] =
         "{\n  \"annotations\": []\n}\n";
@@ -183,6 +181,20 @@ GoldenSceneCaptureStatus golden_capture_scene(
         if (json_saved) DeleteFileW(json_path);
         return GOLDEN_SCENE_CAPTURE_SAVE_FAILED;
     }
+    return GOLDEN_SCENE_CAPTURE_OK;
+}
+
+GoldenSceneCaptureStatus golden_capture_scene_image(
+    HWND foreground, GoldenImage *image, RECT *captured_bounds) {
+    if (!foreground || !image) return GOLDEN_SCENE_CAPTURE_INVALID_ARGUMENT;
+    RECT bounds = {0};
+    if (!collect_scene_bounds(foreground, &bounds))
+        return GOLDEN_SCENE_CAPTURE_NO_VISIBLE_WINDOWS;
+    GoldenImage captured = {0};
+    if (!capture_screen_rect(&bounds, &captured))
+        return GOLDEN_SCENE_CAPTURE_SCREEN_FAILED;
+    golden_image_free(image);
+    *image = captured;
     if (captured_bounds) *captured_bounds = bounds;
     return GOLDEN_SCENE_CAPTURE_OK;
 }
