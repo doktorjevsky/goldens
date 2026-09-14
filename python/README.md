@@ -1,7 +1,7 @@
 # litewinwrap
 
 `litewinwrap` is a small image-driven Windows desktop automation package. It
-finds windows, locates annotated visual targets, and performs mouse and keyboard
+finds windows, locates annotated visual targets and native UI controls, and performs
 actions with one consistent timeout and settling policy.
 
 The package captures the visible desktop. It is intended for interactive
@@ -17,7 +17,7 @@ environment:
 ```powershell
 py -m venv C:\Tools\litewinwrap-env
 C:\Tools\litewinwrap-env\Scripts\python -m pip install `
-    C:\Transfer\litewinwrap-0.1.0a10-py3-none-any.whl
+    C:\Transfer\litewinwrap-0.1.0a11-py3-none-any.whl
 ```
 
 For editable development from this directory:
@@ -128,6 +128,108 @@ window.minimize()
 window.maximize()
 window.close()
 ```
+
+## UI Automation elements
+
+Each `Window` can discover the controls exposed by Microsoft UI Automation.
+The returned `Element` is a separate live class bound to its window and
+automation policy. Controls do not need their own HWND. No additional Python
+dependency is required: the package calls Windows' native COM API on a dedicated
+MTA thread.
+
+```python
+window = automation.find_window(class_name="WindowsUIAutomationTestApp")
+
+name = window.find_element(automation_id="1001", control_type="Edit")
+name.set_value("Alice")
+
+logging = window.find_element(automation_id="1003", control_type="CheckBox")
+logging.set_checked(True)
+logging.set_checked(False)
+logging.toggle()
+
+run = window.find_element("Run", control_type="Button")
+run.invoke()
+```
+
+`find_elements()` is an immediate plural query. `find_element()` waits for one
+match using `timeout_seconds`; it raises `ElementNotFoundError` when none appear
+or `ElementAmbiguousError` when several match. Set `retry_on_ambiguity=True` on
+the session or call to retry multiple matches until the timeout. Name,
+automation ID, control type, and class name selectors accept exact strings or
+compiled regular expressions; all supplied selectors must match. Prefer stable
+automation IDs when an application provides them. Control types use UIA names
+such as `Button`, `Edit`, and `CheckBox`.
+
+List controls for debugging without choosing an action:
+
+```python
+for element in window.elements(visible_only=False):
+    print(element)
+    print(element.info())
+
+buttons = window.find_elements(control_type="Button")
+direct_controls = window.elements(recursive=False)
+children = element.children()  # direct children; recursive=True for descendants
+```
+
+`elements()` returns control-view descendants, omitting the window itself.
+`visible_only=True` filters elements marked offscreen by UIA; this is not an
+occlusion test. Use `visible_only=False` to include offscreen controls.
+`window.children()` continues to list native child windows; UIA elements can
+also represent controls with no native child window.
+
+An `Element` reads these properties live: `name`, `automation_id`,
+`control_type`, `class_name`, `rect` (physical screen pixels), `enabled`,
+`offscreen`, `native_hwnd`, `value`, `read_only`, `checked`, `toggle_state`, and
+`patterns`. `checked` is `None` for an indeterminate checkbox; `toggle_state` is
+`"off"`, `"on"`, or `"indeterminate"`. `patterns` lists supported actions from
+this subset: `Invoke`, `Value`, and `Toggle`. `info()` returns an immutable
+`ElementInfo` snapshot with identification, state, geometry, and pattern
+details; field values are omitted. `element.hwnd` is the owning window's handle
+for failure reports, while `native_hwnd` may be `None`.
+
+Actions return the same element, wait for it to become enabled using the session
+timeout, and use the session's settling policy. Overrides work as elsewhere:
+
+```python
+name.set_value("Example", timeout_seconds=4.0, settle_seconds=0.0)
+logging.set_checked(True, settle_seconds=0.0)
+run.invoke(settle_seconds=0.3)
+```
+
+`set_value()` replaces a field's value through `Value.SetValue`; `invoke()` uses
+`Invoke`; checkbox operations use `Toggle`. `set_checked()` is idempotent and
+handles three-state checkboxes. These operations do not move the mouse, type
+keystrokes, or activate the window; `focus_before_input` still applies to mouse
+and keyboard actions. They are included in failure traces, and supplied field
+text is redacted in the same way as `type_text()`.
+
+An unsupported pattern raises `ElementUnsupportedError`; a read-only field
+raises `ElementReadOnlyError`; an enabled-state or checkbox-state wait raises
+`ElementTimeoutError`. Retained controls that an application destroys or
+replaces can raise `ElementUnavailableError`; find a fresh element after such a
+UI rebuild. Other COM failures raise `UIAutomationError` with the operation and
+HRESULT. Timeouts control library polling; a call into an unresponsive UIA
+provider can take longer. UIA requires an interactive Windows session and
+appropriate access to the target process. Custom-drawn controls may expose no
+usable patterns, so visual targets remain useful.
+
+The external `WindowsUITest.exe` fixture has these fixed IDs:
+
+| Automation ID | Control | Pattern |
+| --- | --- | --- |
+| `1001` | Name field | Value |
+| `1002` | Output folder field | Value |
+| `1003` | Enable logging checkbox | Toggle |
+| `1004` | Dry run checkbox | Toggle |
+| `1005` | Run button | Invoke |
+| `1006` | OK button | Invoke |
+| `1007` | Read-only displayed settings | Value (read-only) |
+
+Both buttons display the current settings and leave the app open. The fixture's
+C source and binary are maintained outside this repository. See
+[`examples/ui_elements.py`](examples/ui_elements.py) for a complete interaction.
 
 ## Visual targets
 
@@ -335,7 +437,15 @@ $env:PYTHONPATH = "src"
 py -m unittest discover -s tests -v
 ```
 
-Live window, capture, and input calls require an interactive Windows desktop.
+Live window, capture, input, and UIA calls require an interactive Windows desktop.
+To include the external native UIA fixture in the tests:
+
+```powershell
+$env:LITEWINWRAP_UI_TEST_APP = "$env:USERPROFILE\Desktop\WindowsUITest.exe"
+py -m unittest discover -s tests -p test_ui_elements_live.py -v
+```
+
+The live check is skipped unless that environment variable is set on Windows.
 The complete Calculator workflows are in [`examples`](examples).
 
 Building, transferring, online installation, and fully offline VM installation

@@ -1,6 +1,17 @@
 from . import keyboard, match, mouse, reporting, win32
 from .automation import Automation
 from .goldens import Goldens, GoldensFormatError
+from .elements import (
+    Element,
+    ElementAmbiguousError,
+    ElementInfo,
+    ElementNotFoundError,
+    ElementReadOnlyError,
+    ElementTimeoutError,
+    ElementUnavailableError,
+    ElementUnsupportedError,
+    UIAutomationError,
+)
 from .match import TargetAmbiguousError, TargetNotFoundError
 from .reporting import Reports
 from .types import Capture, HWND, Match, Point, Rect, Target
@@ -17,6 +28,15 @@ __all__ = [
     "__version__",
     "Automation",
     "Capture",
+    "Element",
+    "ElementAmbiguousError",
+    "ElementInfo",
+    "ElementNotFoundError",
+    "ElementReadOnlyError",
+    "ElementTimeoutError",
+    "ElementUnavailableError",
+    "ElementUnsupportedError",
+    "UIAutomationError",
     "FocusTimeoutError",
     "Goldens",
     "GoldensFormatError",
@@ -39,4 +59,4 @@ __all__ = [
     "win32",
 ]
 
-__version__ = "0.1.0a10"
+__version__ = "0.1.0a11"

@@ -12,6 +12,7 @@ from .types import Capture, HWND, Match, Rect, Target
 
 if TYPE_CHECKING:
     from .automation import Automation
+    from .elements import Element
     from .keyboard import Key
 
 
@@ -160,6 +161,74 @@ class Window:
         raise WindowNotFoundError(
             f"No child of {int(self.hwnd)} matched {selectors} within "
             f"{timeout_seconds:.3f}s"
+        )
+
+    @reporting._trace("List UI elements")
+    def elements(
+        self,
+        *,
+        recursive: bool = True,
+        visible_only: bool = True,
+    ) -> tuple[Element, ...]:
+        """List UI Automation controls, including controls without an HWND."""
+        from . import elements as ui_elements
+
+        return ui_elements.elements(
+            self,
+            recursive=recursive,
+            visible_only=visible_only,
+        )
+
+    @reporting._trace("Find UI elements")
+    def find_elements(
+        self,
+        name: TextSelector | None = None,
+        *,
+        automation_id: TextSelector | None = None,
+        control_type: TextSelector | None = None,
+        class_name: TextSelector | None = None,
+        recursive: bool = True,
+        visible_only: bool = True,
+    ) -> tuple[Element, ...]:
+        """Immediately list controls matching exact strings or regex selectors."""
+        from . import elements as ui_elements
+
+        return ui_elements.find_elements(
+            self,
+            name,
+            automation_id=automation_id,
+            control_type=control_type,
+            class_name=class_name,
+            recursive=recursive,
+            visible_only=visible_only,
+        )
+
+    @reporting._trace("Find UI element")
+    def find_element(
+        self,
+        name: TextSelector | None = None,
+        *,
+        automation_id: TextSelector | None = None,
+        control_type: TextSelector | None = None,
+        class_name: TextSelector | None = None,
+        recursive: bool = True,
+        visible_only: bool = True,
+        timeout_seconds: float | None = None,
+        retry_on_ambiguity: bool | None = None,
+    ) -> Element:
+        """Wait for one matching control, using the automation policy."""
+        from . import elements as ui_elements
+
+        return ui_elements.find_element(
+            self,
+            name,
+            automation_id=automation_id,
+            control_type=control_type,
+            class_name=class_name,
+            recursive=recursive,
+            visible_only=visible_only,
+            timeout_seconds=timeout_seconds,
+            retry_on_ambiguity=retry_on_ambiguity,
         )
 
     @reporting._trace("Capture window")
