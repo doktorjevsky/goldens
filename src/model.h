@@ -21,6 +21,7 @@ typedef struct {
 } GoldenViewport;
 
 BOOL golden_name_exists(const Annotation *items, int count, const wchar_t *name, int except);
+BOOL golden_annotation_name_valid(const wchar_t *name);
 void golden_make_unique_name(const Annotation *items, int count, wchar_t *out, size_t capacity);
 RECT golden_normalize_rect(POINT first, POINT second);
 RECT golden_clamp_rect(RECT rect, int image_width, int image_height);

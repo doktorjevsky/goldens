@@ -20,11 +20,11 @@ def main() -> None:
 
     # The not_found crop represents Calculator before its display changes.
     # Pressing a nonzero digit makes that visual state disappear.
-    pressed = calculator.click(targets["calculator/button_7"])
+    pressed = calculator.click(targets["button_7"])
     print(f"Pressed button_7 at {pressed.click}")
 
     try:
-        calculator.locate(targets["calculator/not_found"])
+        calculator.locate(targets["not_found"])
     except TargetNotFoundError as error:
         print(f"Target {error.target.name!r} was not found, as expected")
         print(f"  threshold: {error.threshold:.4f}")

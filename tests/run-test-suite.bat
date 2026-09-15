@@ -7,7 +7,7 @@ set "CC=x86_64-w64-mingw32-clang.exe"
 where %CC% >nul 2>nul
 if errorlevel 1 set "CC=C:\tools\llvm-mingw-20260616-ucrt-x86_64\bin\x86_64-w64-mingw32-clang.exe"
 
-for %%S in (model render tool_icon ui_layout tooltip resource_tree resource_ops resource_watcher history atomic_file png_io scene_capture recapture_compare) do (
+for %%S in (model render tool_icon ui_layout tooltip resource_tree resource_ops namespace resource_watcher history atomic_file png_io scene_capture recapture_compare) do (
   if /i "%~1"=="%%S" goto suite_%%S
 )
 
@@ -65,6 +65,14 @@ exit /b %errorlevel%
   -o build\resource_tree_tests.exe -lcomctl32 -luser32
 if errorlevel 1 exit /b 1
 build\resource_tree_tests.exe
+exit /b %errorlevel%
+
+:suite_namespace
+%CC% -std=c17 -O2 -Wall -Wextra -DUNICODE -D_UNICODE ^
+  tests\namespace_tests.c src\namespace.c src\resource_ops.c src\atomic_file.c src\document.c src\model.c ^
+  -o build\namespace_tests.exe -luser32
+if errorlevel 1 exit /b 1
+build\namespace_tests.exe
 exit /b %errorlevel%
 
 :suite_resource_watcher

@@ -425,7 +425,7 @@ static BOOL json_parse_annotations(JsonReader *reader, Annotation *items,
         if (parsed >= capacity) return FALSE;
         Annotation annotation = {0};
         if (!json_parse_annotation(reader, &annotation) ||
-            golden_name_exists(items, parsed, annotation.name, -1)) return FALSE;
+            !golden_annotation_name_valid(annotation.name)) return FALSE;
         items[parsed++] = annotation;
         json_skip_space(reader);
         if (reader->current < reader->end && *reader->current == ']') {
@@ -549,11 +549,10 @@ char *golden_document_serialize_utf8(const Annotation *items, int count, size_t 
                          annotation->boundary.left;
         LONGLONG height = (LONGLONG)annotation->boundary.bottom -
                           annotation->boundary.top;
-        if (!annotation->name[0] ||
+        if (!golden_annotation_name_valid(annotation->name) ||
             !wmemchr(annotation->name, 0, _countof(annotation->name)) ||
             width <= 0 || width > LONG_MAX ||
             height <= 0 || height > LONG_MAX ||
-            golden_name_exists(items, count, annotation->name, i) ||
             (annotation->has_click &&
              (!isfinite(annotation->click_x) || !isfinite(annotation->click_y) ||
               annotation->click_x < 0.0 || annotation->click_x > 1.0 ||
