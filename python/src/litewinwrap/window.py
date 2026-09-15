@@ -176,6 +176,8 @@ class Window:
         threshold: float | None = None,
         timeout_seconds: float | None = None,
         overlap: float | None = None,
+        target_scale_tolerance: float | None = None,
+        target_scale_step: float | None = None,
     ) -> tuple[Match, ...]:
         from . import match as image_match
 
@@ -185,6 +187,9 @@ class Window:
             threshold=self.automation._resolve_threshold(threshold),
             timeout_seconds=self.automation._resolve_timeout_seconds(timeout_seconds),
             overlap=self.automation._resolve_overlap(overlap),
+            **self.automation._target_scale_options(
+                target_scale_tolerance, target_scale_step
+            ),
         )
 
     @reporting._trace("Locate target")
@@ -196,6 +201,8 @@ class Window:
         timeout_seconds: float | None = None,
         overlap: float | None = None,
         retry_on_ambiguity: bool | None = None,
+        target_scale_tolerance: float | None = None,
+        target_scale_step: float | None = None,
     ) -> Match:
         from . import match as image_match
 
@@ -211,6 +218,9 @@ class Window:
             timeout_seconds=self.automation._resolve_timeout_seconds(timeout_seconds),
             overlap=self.automation._resolve_overlap(overlap),
             retry_on_ambiguity=retry,
+            **self.automation._target_scale_options(
+                target_scale_tolerance, target_scale_step
+            ),
         )
 
     @reporting._trace("Locate best target match")
@@ -221,6 +231,8 @@ class Window:
         threshold: float | None = None,
         timeout_seconds: float | None = None,
         overlap: float | None = None,
+        target_scale_tolerance: float | None = None,
+        target_scale_step: float | None = None,
     ) -> Match:
         from . import match as image_match
 
@@ -230,6 +242,9 @@ class Window:
             threshold=self.automation._resolve_threshold(threshold),
             timeout_seconds=self.automation._resolve_timeout_seconds(timeout_seconds),
             overlap=self.automation._resolve_overlap(overlap),
+            **self.automation._target_scale_options(
+                target_scale_tolerance, target_scale_step
+            ),
         )
 
     @reporting._trace("Hover over target")
@@ -241,6 +256,8 @@ class Window:
         timeout_seconds: float | None = None,
         overlap: float | None = None,
         retry_on_ambiguity: bool | None = None,
+        target_scale_tolerance: float | None = None,
+        target_scale_step: float | None = None,
         focus: bool | None = None,
         settle_seconds: float | None = None,
     ) -> Match:
@@ -248,12 +265,18 @@ class Window:
 
         if self.automation._resolve_focus(focus) and not self.foreground:
             self.focus(settle_seconds=0.0)
+        scale_options = {}
+        if target_scale_tolerance is not None:
+            scale_options["target_scale_tolerance"] = target_scale_tolerance
+        if target_scale_step is not None:
+            scale_options["target_scale_step"] = target_scale_step
         found = self.locate(
             target,
             threshold=threshold,
             timeout_seconds=timeout_seconds,
             overlap=overlap,
             retry_on_ambiguity=retry_on_ambiguity,
+            **scale_options,
         )
         mouse.move_to(found.click)
         self.automation._settle(settle_seconds)
@@ -268,6 +291,8 @@ class Window:
         timeout_seconds: float | None = None,
         overlap: float | None = None,
         retry_on_ambiguity: bool | None = None,
+        target_scale_tolerance: float | None = None,
+        target_scale_step: float | None = None,
         button: Button = "left",
         focus: bool | None = None,
         settle_seconds: float | None = None,
@@ -288,6 +313,9 @@ class Window:
             timeout_seconds=self.automation._resolve_timeout_seconds(timeout_seconds),
             overlap=self.automation._resolve_overlap(overlap),
             retry_on_ambiguity=retry,
+            **self.automation._target_scale_options(
+                target_scale_tolerance, target_scale_step
+            ),
             button=button,
             wait_after_seconds=self.automation._resolve_settle_seconds(settle_seconds),
         )
@@ -300,6 +328,8 @@ class Window:
         threshold: float | None = None,
         timeout_seconds: float | None = None,
         overlap: float | None = None,
+        target_scale_tolerance: float | None = None,
+        target_scale_step: float | None = None,
         button: Button = "left",
         focus: bool | None = None,
         settle_seconds: float | None = None,
@@ -314,6 +344,9 @@ class Window:
             threshold=self.automation._resolve_threshold(threshold),
             timeout_seconds=self.automation._resolve_timeout_seconds(timeout_seconds),
             overlap=self.automation._resolve_overlap(overlap),
+            **self.automation._target_scale_options(
+                target_scale_tolerance, target_scale_step
+            ),
             button=button,
             wait_after_seconds=self.automation._resolve_settle_seconds(settle_seconds),
         )

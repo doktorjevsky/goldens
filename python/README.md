@@ -68,6 +68,7 @@ same defaults:
 - `timeout_seconds`: how long discovery and visual searches may retry;
 - `settle_seconds`: how long actions yield for the UI to repaint afterward;
 - `threshold` and `overlap`: visual-matching defaults;
+- `target_scale_tolerance` and `target_scale_step`: optional target-size search;
 - `retry_on_ambiguity`: whether a transient multiple match may be retried;
 - `focus_before_input`: whether clicks and keyboard actions activate their window.
 
@@ -86,6 +87,26 @@ process-level choice rather than a per-action setting; applications that
 already manage it can opt out with `Automation(dpi_awareness="unchanged")`.
 All time-bearing API values include their unit in the name; they currently use
 seconds, for example `timeout_seconds`, `settle_seconds`, and `interval_seconds`.
+
+## Displays
+
+`Display.active()` reports every active Windows display, including its bounds,
+work area, effective DPI, scale, and primary status. A script can configure one
+user scale for every display before starting the application under test:
+
+```python
+from litewinwrap import Display
+
+Display.set_scale(1.10)
+```
+
+`set_scale()` first reads every active display and is a no-op when all of them
+already use the requested scale. Otherwise it configures the same user scale
+for all displays and raises `DisplayScaleRestartRequired`; sign out of Windows
+and rerun the script to use the new scale. Windows supports values from `1.0`
+through `5.0`. Custom percentages are represented by integer DPI internally,
+so the effective value exposed by `Display.scale` can differ slightly from the
+requested float.
 
 ## Windows
 
@@ -180,6 +201,26 @@ highest-scoring occurrence is deliberately explicit. A failed search raises
 raise `TargetAmbiguousError`. `hover()` moves to the target's annotated click
 point, or its center when no click point was saved, then uses the session's
 settling policy so hover-driven UI has time to render.
+
+Targets can be searched across a relative scale range. This is useful when the
+current desktop has the same configured scale as the reference machine but an
+application or remote-display client renders at a slightly different size:
+
+```python
+found = window.locate(
+    submit,
+    target_scale_tolerance=0.10,
+    target_scale_step=0.02,
+)
+print(found.scale)
+```
+
+The example evaluates 100% plus and minus 2% steps through 90% and 110%. All
+scales are compared in one search; overlapping results at neighboring scales
+are treated as one physical occurrence, and the highest-scoring scale is kept.
+Set these values on `Automation` to use them as session defaults. Per-action
+values override the session, and an explicit tolerance of `0.0` requests exact
+matching. Exact matching remains the default.
 
 ## Text and keys
 

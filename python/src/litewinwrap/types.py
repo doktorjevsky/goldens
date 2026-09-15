@@ -56,3 +56,4 @@ class Match:
     score: float
     rect: Rect
     click: Point
+    scale: float = 1.0

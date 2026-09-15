@@ -57,6 +57,8 @@ class Automation:
     settle_seconds: float = 0.15
     threshold: float = 0.90
     overlap: float = 0.30
+    target_scale_tolerance: float = 0.0
+    target_scale_step: float = 0.02
     retry_on_ambiguity: bool = False
     focus_before_input: bool = True
     dpi_awareness: Literal["per-monitor-v2", "unchanged"] = "per-monitor-v2"
@@ -76,6 +78,16 @@ class Automation:
             raise ValueError("Match threshold must be between 0 and 1")
         if not 0.0 <= self.overlap < 1.0:
             raise ValueError("Overlap threshold must be at least 0 and less than 1")
+        object.__setattr__(
+            self,
+            "target_scale_tolerance",
+            self._validate_target_scale_tolerance(self.target_scale_tolerance),
+        )
+        object.__setattr__(
+            self,
+            "target_scale_step",
+            self._validate_target_scale_step(self.target_scale_step),
+        )
         if not isinstance(self.focus_before_input, bool):
             raise TypeError("Focus-before-input policy must be a boolean")
         if self.dpi_awareness not in ("per-monitor-v2", "unchanged"):
@@ -108,6 +120,50 @@ class Automation:
         if not 0.0 <= result < 1.0:
             raise ValueError("Overlap threshold must be at least 0 and less than 1")
         return result
+
+    @staticmethod
+    def _validate_target_scale_tolerance(value: float) -> float:
+        result = float(value)
+        if not isfinite(result) or not 0.0 <= result < 1.0:
+            raise ValueError(
+                "Target scale tolerance must be finite, at least 0, and less than 1"
+            )
+        return result
+
+    @staticmethod
+    def _validate_target_scale_step(value: float) -> float:
+        result = float(value)
+        if not isfinite(result) or result <= 0.0:
+            raise ValueError("Target scale step must be a finite positive number")
+        return result
+
+    def _resolve_target_scale_tolerance(self, value: float | None) -> float:
+        return (
+            self.target_scale_tolerance
+            if value is None
+            else self._validate_target_scale_tolerance(value)
+        )
+
+    def _resolve_target_scale_step(self, value: float | None) -> float:
+        return (
+            self.target_scale_step
+            if value is None
+            else self._validate_target_scale_step(value)
+        )
+
+    def _target_scale_options(
+        self,
+        tolerance: float | None,
+        step: float | None,
+    ) -> dict[str, float]:
+        resolved_tolerance = self._resolve_target_scale_tolerance(tolerance)
+        resolved_step = self._resolve_target_scale_step(step)
+        if resolved_tolerance == 0.0:
+            return {}
+        return {
+            "target_scale_tolerance": resolved_tolerance,
+            "target_scale_step": resolved_step,
+        }
 
     def _resolve_focus(self, focus: bool | None) -> bool:
         if focus is None:
