@@ -7,6 +7,8 @@ from . import win32
 from .types import Rect
 
 
+# Windows defines 96 logical DPI as 100% display scaling. Global custom
+# scaling accepts percentages from 100% through 500%.
 _DEFAULT_DPI = 96
 _MINIMUM_SCALE = 1.0
 _MAXIMUM_SCALE = 5.0
