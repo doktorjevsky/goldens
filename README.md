@@ -3,15 +3,21 @@
 Goldens is a dependency-free native Windows 11 application for creating and
 annotating screenshot resources used by pixel-based regression tests.
 
-Each resource consists of a visible PNG and an optional adjacent JSON file:
+Each resource consists of a visible PNG and an adjacent JSON sidecar:
 
 ```text
 login.png
 login.json
 ```
 
-The JSON stores uniquely named rectangular annotations in image pixels and an
-optional click point normalized within its rectangle.
+The JSON stores rectangular annotations in image pixels and optional click
+points normalized within their rectangles. Each folder is a namespace:
+annotation names are unique, case-insensitively, across every sidecar in that
+folder. Nested folders form nested namespaces, and PNG filenames are never part
+of annotation identifiers. The editor marks ambiguous duplicate annotation rows
+in red and shows a right-aligned footer error, but does not block the edit. If
+any collision remains when Goldens closes, it asks for confirmation. The Python
+loader rejects collisions because they cannot form a deterministic mapping.
 
 ## Build
 
@@ -81,9 +87,12 @@ destination to the corresponding directory.
   tree, and **Ctrl+Y** deletes it again. **Ctrl+C** copies the
   displayed image to the Windows clipboard. When it is a PNG resource, pasting
   it with **Ctrl+V** duplicates the PNG and sidecar under an available name;
-  clashes are indexed as `name-1.png`, `name-2.png`, and so on. Bitmap
-  images copied from other applications can also be pasted as new named PNG
-  resources. Resource-folder expansion is preserved across refreshes, and the
+  clashes are indexed as `name-1.png`, `name-2.png`, and so on. Because PNG
+  names do not qualify annotations, duplicating an annotated pair into the same
+  folder marks its colliding annotation rows in red but is still allowed. Bitmap
+  images copied from other applications can also be pasted as new named
+  PNG/sidecar resources. Resource-folder
+  expansion is preserved across refreshes, and the
   paste destination opens automatically. Pasted resources participate in
   undo/redo.
   A persistent transaction journal completes or rolls back an
@@ -166,7 +175,8 @@ annotation names and geometry,
 click normalization, viewport transforms, strict and order-independent JSON
 parsing, arbitrarily long unknown keys, Unicode and escape round trips,
 malformed/truncated input, numeric and nesting limits, full annotation capacity,
-and invalid-model serialization,
+invalid-model serialization, folder-scoped namespace validation, nested-folder
+isolation, and case-insensitive cross-sidecar collision detection,
 recursive resource-folder change notifications, burst coalescing, stress
 coverage, and clean watcher shutdown,
 resource-tree move validation and PNG/JSON moves between directories,
@@ -221,6 +231,7 @@ automation around Goldens resources. An `Automation` session owns discovery,
 matching, timing, and settling policy; its bound windows expose focused text,
 key, capture, locate, and click actions through one high-level workflow.
 Individual PNG/JSON pairs and recursive resource roots load as mappings of
-path-qualified targets. Raw Win32, mouse, keyboard, and OpenCV matching modules
+folder-qualified annotation targets; PNG filenames are not part of target
+identifiers. Raw Win32, mouse, keyboard, and OpenCV matching modules
 remain available as advanced escape hatches. The native Goldens application
 remains dependency-free.

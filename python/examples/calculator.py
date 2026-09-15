@@ -35,9 +35,8 @@ def main() -> None:
     ]
 
     for name in buttons:
-        target_name = f"calculator/{name}"
-        found = calculator.click(targets[target_name])
-        print(f"{target_name:<25} score={found.score:.4f} click={found.click}")
+        found = calculator.click(targets[name])
+        print(f"{name:<25} score={found.score:.4f} click={found.click}")
 
 
 if __name__ == "__main__":

@@ -30,7 +30,7 @@ class GoldensTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-    def test_exposes_qualified_annotation_crops_as_a_mapping(self) -> None:
+    def test_exposes_annotation_crops_as_a_mapping(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             png = Path(directory) / "calculator.png"
             self._write_resource(
@@ -64,15 +64,15 @@ class GoldensTests(unittest.TestCase):
             self.assertIsNone(goldens.root)
             self.assertEqual(
                 tuple(goldens),
-                ("calculator/button_0", "calculator/button_1"),
+                ("button_0", "button_1"),
             )
             self.assertEqual(len(goldens), 2)
-            self.assertIn("calculator/button_0", goldens)
-            target = goldens["calculator/button_0"]
-            self.assertEqual(target.name, "calculator/button_0")
+            self.assertIn("button_0", goldens)
+            target = goldens["button_0"]
+            self.assertEqual(target.name, "button_0")
             self.assertEqual(target.pixels.shape, (6, 10, 3))
             self.assertEqual(target.click, (0.25, 0.75))
-            self.assertIsNone(goldens["calculator/button_1"].click)
+            self.assertIsNone(goldens["button_1"].click)
             self.assertFalse(target.pixels.flags.writeable)
             self.assertTrue(target.pixels.flags.owndata)
 
@@ -102,11 +102,11 @@ class GoldensTests(unittest.TestCase):
             self.assertEqual(goldens.paths, (calculator, login))
             self.assertEqual(
                 tuple(goldens),
-                ("calculator/submit", "dialogs/login/submit"),
+                ("submit", "dialogs/submit"),
             )
             self.assertEqual(
-                goldens["dialogs/login/submit"].name,
-                "dialogs/login/submit",
+                goldens["dialogs/submit"].name,
+                "dialogs/submit",
             )
 
     def test_rejects_case_insensitive_identifier_collisions(self) -> None:
@@ -172,7 +172,7 @@ class GoldensTests(unittest.TestCase):
 
             goldens = Goldens.from_png(png)
 
-            self.assertIn("unicode/button_😀", goldens)
+            self.assertIn("button_😀", goldens)
 
     def test_rejects_namespace_separator_in_annotation_name(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -194,6 +194,66 @@ class GoldensTests(unittest.TestCase):
 
             with self.assertRaisesRegex(GoldensFormatError, "reserved"):
                 Goldens.from_png(png)
+
+            self._write_resource(
+                png,
+                [
+                    {
+                        "name": "dialog\\submit",
+                        "boundary": {
+                            "x": 0,
+                            "y": 0,
+                            "width": 1,
+                            "height": 1,
+                        },
+                    }
+                ],
+            )
+            with self.assertRaisesRegex(GoldensFormatError, "reserved"):
+                Goldens.from_png(png)
+
+    def test_png_names_do_not_contribute_to_folder_identifiers(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            boundary = {"x": 0, "y": 0, "width": 1, "height": 1}
+            self._write_resource(
+                root / "homepage" / "wide.png",
+                [{"name": "hero", "boundary": boundary}],
+            )
+            self._write_resource(
+                root / "homepage" / "narrow.png",
+                [{"name": "nav", "boundary": boundary}],
+            )
+            self._write_resource(
+                root / "homepage" / "account" / "dialog.png",
+                [{"name": "submit", "boundary": boundary}],
+            )
+
+            goldens = Goldens.from_root(root)
+
+            self.assertEqual(
+                set(goldens),
+                {"homepage/hero", "homepage/nav", "homepage/account/submit"},
+            )
+
+    def test_rejects_duplicate_annotations_across_pngs_in_one_folder(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            boundary = {"x": 0, "y": 0, "width": 1, "height": 1}
+            self._write_resource(
+                root / "homepage" / "wide.png",
+                [{"name": "hero", "boundary": boundary}],
+            )
+            self._write_resource(
+                root / "homepage" / "narrow.png",
+                [{"name": "HERO", "boundary": boundary}],
+            )
+
+            with self.assertRaisesRegex(
+                GoldensFormatError,
+                "Duplicate target identifier",
+            ):
+                Goldens.from_root(root)
 
     def test_requires_an_explicit_loading_mode(self) -> None:
         with self.assertRaisesRegex(TypeError, "from_png.*from_root"):

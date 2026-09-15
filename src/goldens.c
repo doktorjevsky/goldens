@@ -27,6 +27,7 @@
 #include "ui_tool_icon.h"
 #include "resource_tree.h"
 #include "resource_ops.h"
+#include "namespace.h"
 #include "resource_watcher.h"
 #include "atomic_file.h"
 #include "history.h"
@@ -82,7 +83,7 @@ typedef struct {
 
 typedef struct {
     HINSTANCE instance;
-    HWND main, tree, editor, status;
+    HWND main, tree, editor, status, namespace_status;
     HWND editor_tooltip, tool_tooltip;
     HWND left_splitter;
     HWND context_label;
@@ -107,6 +108,7 @@ typedef struct {
     GoldenImageCache image_cache;
 
     BOOL resource_visible;
+    BOOL namespace_collision;
 
     BOOL capture_hotkey_enabled;
     BOOL capture_hotkey_registered;
@@ -358,6 +360,13 @@ static void update_status(void) {
     SetWindowTextW(g.status, text);
 }
 
+static void update_namespace_status(void) {
+    if (!g.namespace_status) return;
+    SetWindowTextW(g.namespace_status, g.namespace_collision ?
+        L"!  Duplicate annotation names  " : L"");
+    InvalidateRect(g.namespace_status, NULL, TRUE);
+}
+
 static void update_context_label(void) {
     if (!g.context_label) return;
     wchar_t text[MAX_PATH * 4 + 128];
@@ -461,12 +470,60 @@ static void redo_action(void) {
     update_menu_availability();
 }
 
-static BOOL annotation_name_exists(const wchar_t *name, int except) {
-    return golden_name_exists(g.annotations, g.annotation_count, name, except);
+static void show_namespace_error(GoldenNamespaceStatus status,
+                                 const GoldenNamespaceIssue *issue) {
+    if (status == GOLDEN_NAMESPACE_DUPLICATE) return;
+    wchar_t message[MAX_PATH * 8 + 384];
+    const wchar_t *first = issue && issue->first_png[0] ?
+        PathFindFileNameW(issue->first_png) : L"the resource";
+    if (status == GOLDEN_NAMESPACE_INVALID_SIDECAR) {
+        _snwprintf(message, _countof(message),
+            L"The annotation sidecar for '%s' is invalid. Fix it before changing this folder namespace.",
+            first);
+    } else if (status == GOLDEN_NAMESPACE_PATH_TOO_LONG) {
+        wcscpy(message, L"A resource path is too long to validate its folder namespace.");
+    } else if (status == GOLDEN_NAMESPACE_OUT_OF_MEMORY) {
+        wcscpy(message, L"Goldens ran out of memory while validating the folder namespace.");
+    } else {
+        wcscpy(message, L"Goldens could not scan the folder namespace for annotation conflicts.");
+    }
+    show_error(message);
 }
 
-static void make_unique_name(wchar_t *out, size_t cap) {
-    golden_make_unique_name(g.annotations, g.annotation_count, out, cap);
+static BOOL namespace_status_allows_change(
+    GoldenNamespaceStatus status, const GoldenNamespaceIssue *issue) {
+    if (status == GOLDEN_NAMESPACE_OK ||
+        status == GOLDEN_NAMESPACE_DUPLICATE) return TRUE;
+    show_namespace_error(status, issue);
+    return FALSE;
+}
+
+static BOOL annotation_name_available(const wchar_t *name, int except,
+                                      BOOL *available) {
+    *available = !golden_name_exists(g.annotations, g.annotation_count,
+                                     name, except);
+    if (!*available || !g.current_dir[0] || !g.image_path[0]) return TRUE;
+    BOOL found = FALSE;
+    GoldenNamespaceIssue issue;
+    GoldenNamespaceStatus status = golden_namespace_find_name(
+        g.current_dir, g.image_path, name, &found, &issue);
+    if (status != GOLDEN_NAMESPACE_OK) {
+        show_namespace_error(status, &issue);
+        return FALSE;
+    }
+    *available = !found;
+    return TRUE;
+}
+
+static BOOL make_unique_name(wchar_t *out, size_t cap) {
+    int suffix = g.annotation_count + 1;
+    for (;;) {
+        _snwprintf(out, cap, L"annotation_%d", suffix++);
+        out[cap - 1] = 0;
+        BOOL available = FALSE;
+        if (!annotation_name_available(out, -1, &available)) return FALSE;
+        if (available) return TRUE;
+    }
 }
 
 static void trim_text(wchar_t *text) {
@@ -480,16 +537,18 @@ static void trim_text(wchar_t *text) {
 static BOOL prompt_annotation_name(wchar_t *name, size_t capacity, int except) {
     for (;;) {
         if (!prompt_text(g.main, except < 0 ? L"New annotation" : L"Rename annotation",
-                         L"Unique annotation name:", name, capacity)) return FALSE;
+                         L"Annotation name:", name, capacity)) return FALSE;
         trim_text(name);
         if (!name[0]) {
             show_error(L"The annotation name cannot be empty.");
             continue;
         }
-        if (annotation_name_exists(name, except)) {
-            show_error(L"That annotation name is already used in this image.");
+        if (!golden_annotation_name_valid(name)) {
+            show_error(L"Annotation names cannot contain '/' or '\\' because those characters separate namespaces.");
             continue;
         }
+        BOOL available = FALSE;
+        if (!annotation_name_available(name, except, &available)) return FALSE;
         return TRUE;
     }
 }
@@ -588,6 +647,8 @@ static void clear_image(void) {
     g.image_w = g.image_h = g.stride = 0;
     g.resource_visible = FALSE;
     g.image_identity_valid = FALSE;
+    g.namespace_collision = FALSE;
+    update_namespace_status();
     ++g.image_revision;
 }
 
@@ -623,39 +684,35 @@ static void load_annotations(const wchar_t *png_path) {
     g.annotation_count = 0;
     g.selected = -1;
     golden_history_remove_annotations(&g.history);
-    wchar_t path[MAX_PATH * 4];
-    if (!json_path_for(png_path, path, _countof(path))) {
-        show_error(L"The resource path is too long to locate its annotation JSON file.");
-        return;
-    }
-    FILE *file = _wfopen(path, L"rb");
-    if (file) {
-        if (fseek(file, 0, SEEK_END) == 0) {
-            errno = 0;
-            long length = ftell(file);
-            if (length > 0 && length <= 16 * 1024 * 1024 && errno == 0 &&
-                fseek(file, 0, SEEK_SET) == 0) {
-                char *text = (char *)malloc((size_t)length + 1);
-                if (text) {
-                    size_t got = fread(text, 1, (size_t)length, file);
-                    text[got] = 0;
-                    int count = MAX_ANNOTATIONS;
-                    if (golden_document_parse_utf8(text, got,
-                                                   g.annotations, &count))
-                        g.annotation_count = count;
-                    else
-                        show_error(L"The annotation JSON is invalid and was not loaded.");
-                    free(text);
-                }
-            }
-        }
-        fclose(file);
-    }
+    int count = MAX_ANNOTATIONS;
+    GoldenNamespaceIssue issue;
+    GoldenNamespaceStatus status = golden_namespace_load_annotations(
+        png_path, g.annotations, &count, &issue);
+    if (status == GOLDEN_NAMESPACE_OK)
+        g.annotation_count = count;
+    else
+        show_namespace_error(status, &issue);
     mark_current_annotations_saved();
+
+    if (status == GOLDEN_NAMESPACE_OK && g.current_dir[0]) {
+        status = golden_namespace_validate_directory(
+            g.current_dir, g.annotations, g.annotation_count,
+            g.image_path, g.image_path, NULL, &issue);
+        if (status != GOLDEN_NAMESPACE_OK &&
+            status != GOLDEN_NAMESPACE_DUPLICATE)
+            show_namespace_error(status, &issue);
+    }
 }
 
 static BOOL save_annotations(void) {
     if (!g.image_path[0]) return FALSE;
+    GoldenNamespaceIssue issue;
+    GoldenNamespaceStatus status = golden_namespace_validate_directory(
+        g.current_dir, g.annotations, g.annotation_count,
+        g.image_path, g.image_path, NULL, &issue);
+    if (!namespace_status_allows_change(status, &issue)) {
+        return FALSE;
+    }
     wchar_t path[MAX_PATH * 4];
     if (!json_path_for(g.image_path, path, _countof(path))) {
         show_error(L"The resource path is too long to save its annotation JSON file.");
@@ -666,7 +723,10 @@ static BOOL save_annotations(void) {
     if (!json) { show_error(L"Could not serialize the annotations."); return FALSE; }
     BOOL ok = golden_atomic_write_bytes(path, json, json_length);
     free(json);
-    if (ok) mark_current_annotations_saved();
+    if (ok) {
+        mark_current_annotations_saved();
+        refresh_annotation_tree();
+    }
     else show_error(L"Could not finish writing the annotation JSON file.");
     InvalidateRect(g.editor, NULL, FALSE);
     return ok;
@@ -790,6 +850,23 @@ static void delete_annotation_nodes(HTREEITEM item) {
 
 static void refresh_annotation_tree(void) {
     if (!g.tree) return;
+    BOOL collisions[MAX_ANNOTATIONS] = {0};
+    if (g.image_path[0] && g.current_dir[0]) {
+        GoldenNamespaceIssue issue;
+        golden_namespace_mark_collisions(
+            g.current_dir, g.image_path, g.annotations,
+            g.annotation_count, collisions, &issue);
+    }
+    BOOL active_collision = FALSE;
+    for (int i = 0; i < g.annotation_count; ++i)
+        if (collisions[i]) active_collision = TRUE;
+    GoldenNamespaceIssue tree_issue;
+    GoldenNamespaceStatus tree_status = g.root[0] ?
+        golden_namespace_validate_tree(g.root, &tree_issue) :
+        GOLDEN_NAMESPACE_OK;
+    g.namespace_collision = active_collision ||
+                            tree_status == GOLDEN_NAMESPACE_DUPLICATE;
+    update_namespace_status();
     g.rebuilding_resources = TRUE;
     delete_annotation_nodes(TreeView_GetRoot(g.tree));
     if (g.image_path[0]) {
@@ -800,6 +877,7 @@ static void refresh_annotation_tree(void) {
             if (!node) break;
             node->kind = RESOURCE_ANNOTATION;
             node->annotation_index = i;
+            node->annotation_collision = collisions[i];
             TVINSERTSTRUCTW insert = {0};
             insert.hParent = resource;
             insert.hInsertAfter = TVI_LAST;
@@ -1909,10 +1987,12 @@ static LRESULT CALLBACK EditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             g.drawing = FALSE;
             RECT r = golden_normalize_rect(g.draw_start, g.draw_current);
             if (r.right - r.left >= 2 && r.bottom - r.top >= 2) {
+                wchar_t name[128];
+                if (!make_unique_name(name, _countof(name))) return 0;
                 if (!push_undo()) return 0;
                 Annotation *a = &g.annotations[g.annotation_count];
                 ZeroMemory(a, sizeof(*a));
-                make_unique_name(a->name, _countof(a->name));
+                wcscpy(a->name, name);
                 a->boundary = r;
                 g.selected = g.annotation_count++;
                 update_dirty_state();
@@ -2292,10 +2372,54 @@ static GoldenResourceRenameResult move_resource_pair(const wchar_t *source,
                                                       journal);
 }
 
+static BOOL validate_resource_destination(const wchar_t *source,
+                                          const wchar_t *destination,
+                                          BOOL source_will_be_removed) {
+    if (!source || !destination || !g.root[0] ||
+        !golden_path_is_same_or_inside(destination, g.root)) return TRUE;
+    wchar_t source_directory[MAX_PATH * 4], destination_directory[MAX_PATH * 4];
+    if (!parent_dir_for(source, source_directory, _countof(source_directory)) ||
+        !parent_dir_for(destination, destination_directory,
+                        _countof(destination_directory))) {
+        show_error(L"The resource path is too long to validate its folder namespace.");
+        return FALSE;
+    }
+
+    Annotation annotations[MAX_ANNOTATIONS];
+    int count = MAX_ANNOTATIONS;
+    GoldenNamespaceIssue issue;
+    GoldenNamespaceStatus status;
+    if (g.image_path[0] && !_wcsicmp(source, g.image_path)) {
+        count = g.annotation_count;
+        memcpy(annotations, g.annotations,
+               sizeof(Annotation) * (size_t)count);
+        status = GOLDEN_NAMESPACE_OK;
+    } else {
+        status = golden_namespace_load_annotations(
+            source, annotations, &count, &issue);
+    }
+    if (!namespace_status_allows_change(status, &issue)) {
+        return FALSE;
+    }
+
+    const wchar_t *excluded_source = source_will_be_removed &&
+        !_wcsicmp(source_directory, destination_directory) ? source : NULL;
+    status = golden_namespace_validate_directory(
+        destination_directory, annotations, count, source,
+        excluded_source, destination, &issue);
+    if (!namespace_status_allows_change(status, &issue)) {
+        return FALSE;
+    }
+    return TRUE;
+}
+
 static BOOL move_two_resource_pairs(const wchar_t *first_source,
                                     const wchar_t *first_destination,
                                     const wchar_t *second_source,
                                     const wchar_t *second_destination) {
+    if (!validate_resource_destination(first_source, first_destination, TRUE) ||
+        !validate_resource_destination(second_source, second_destination, TRUE))
+        return FALSE;
     GoldenResourceRenameResult first = move_resource_pair(first_source,
                                                            first_destination);
     if (first != GOLDEN_RENAME_OK) {
@@ -2397,6 +2521,8 @@ static BOOL apply_resource_history(GoldenHistoryEntry *entry, BOOL undo) {
     if (entry->kind == GOLDEN_HISTORY_CREATE_PNG) {
         const wchar_t *source = undo ? entry->source : entry->destination;
         const wchar_t *destination = undo ? entry->destination : entry->source;
+        if (!validate_resource_destination(source, destination, TRUE))
+            return FALSE;
         GoldenResourceRenameResult result = move_resource_pair(source, destination);
         if (result != GOLDEN_RENAME_OK) {
             show_error(resource_pair_error(result));
@@ -2431,6 +2557,8 @@ static BOOL apply_resource_history(GoldenHistoryEntry *entry, BOOL undo) {
     if (entry->kind == GOLDEN_HISTORY_DELETE_PNG) {
         const wchar_t *source = undo ? entry->destination : entry->source;
         const wchar_t *destination = undo ? entry->source : entry->destination;
+        if (!validate_resource_destination(source, destination, TRUE))
+            return FALSE;
         GoldenResourceRenameResult result = move_resource_pair(source, destination);
         if (result != GOLDEN_RENAME_OK) {
             show_error(resource_pair_error(result));
@@ -2573,6 +2701,8 @@ static BOOL apply_resource_history(GoldenHistoryEntry *entry, BOOL undo) {
     const wchar_t *source = undo ? entry->destination : entry->source;
     const wchar_t *destination = undo ? entry->source : entry->destination;
     if (entry->kind == GOLDEN_HISTORY_MOVE_PNG) {
+        if (!validate_resource_destination(source, destination, TRUE))
+            return FALSE;
         GoldenResourceRenameResult result =
             move_resource_pair(source, destination);
         if (result != GOLDEN_RENAME_OK) {
@@ -2661,6 +2791,8 @@ static BOOL move_resource_to_directory(ResourceTreeNode *source,
         return FALSE;
     }
     if (source->kind == RESOURCE_PNG) {
+        if (!validate_resource_destination(source->path, new_path, TRUE))
+            return FALSE;
         GoldenResourceRenameResult result =
             move_resource_pair(source->path, new_path);
         if (result == GOLDEN_RENAME_PNG_EXISTS)
@@ -2710,6 +2842,8 @@ static BOOL rename_resource_file(const wchar_t *old_path, const wchar_t *edited_
     }
     if (!wcscmp(old_path, new_path)) return TRUE;
 
+    if (!validate_resource_destination(old_path, new_path, TRUE))
+        return FALSE;
     GoldenResourceRenameResult result = move_resource_pair(old_path, new_path);
     if (result == GOLDEN_RENAME_PNG_EXISTS)
         return replace_resource_after_confirmation(old_path, new_path);
@@ -2740,6 +2874,11 @@ static BOOL begin_tree_rename(HTREEITEM item) {
     TreeView_SelectItem(g.tree, item);
     HWND edit = TreeView_EditLabel(g.tree, item);
     if (edit) {
+        if (node->kind == RESOURCE_ANNOTATION &&
+            node->annotation_index >= 0 &&
+            node->annotation_index < g.annotation_count)
+            SetWindowTextW(edit,
+                g.annotations[node->annotation_index].name);
         SetFocus(edit);
         SendMessageW(edit, EM_LIMITTEXT,
             node->kind == RESOURCE_ANNOTATION ? 127 : 255, 0);
@@ -2860,6 +2999,15 @@ static BOOL resource_pair_path_available(const wchar_t *png_path) {
         GetFileAttributesW(png_path) == INVALID_FILE_ATTRIBUTES &&
         golden_resource_json_path(png_path, json_path, _countof(json_path)) &&
         GetFileAttributesW(json_path) == INVALID_FILE_ATTRIBUTES;
+}
+
+static BOOL create_empty_sidecar(const wchar_t *png_path) {
+    static const char document[] = "{\n  \"annotations\": []\n}\n";
+    wchar_t json_path[MAX_PATH * 4];
+    return golden_resource_json_path(
+               png_path, json_path, _countof(json_path)) &&
+           golden_atomic_write_bytes(
+               json_path, document, sizeof(document) - 1);
 }
 
 static BOOL make_unique_copy_path(const wchar_t *source,
@@ -3041,6 +3189,9 @@ static void paste_image_from_clipboard(void) {
         } else if (!make_unique_copy_path(source, directory, destination,
                                           _countof(destination))) {
             show_error(L"Goldens could not find an available name for the pasted PNG.");
+        } else if (!validate_resource_destination(
+                       source, destination, FALSE)) {
+            /* The validator reports the namespace conflict. */
         } else if (!golden_copy_resource_pair(source, destination)) {
             show_error(L"Windows could not copy the PNG and its JSON sidecar.");
         } else {
@@ -3064,6 +3215,9 @@ static void paste_image_from_clipboard(void) {
             } else if (!save_png_pixels(destination, image.pixels, image.width,
                                         image.height, image.stride)) {
                 show_error(L"Goldens could not save the pasted image.");
+            } else if (!create_empty_sidecar(destination)) {
+                DeleteFileW(destination);
+                show_error(L"Goldens could not create the pasted image's annotation sidecar.");
             } else {
                 created = TRUE;
             }
@@ -3592,6 +3746,10 @@ static void layout_children(HWND hwnd) {
     for (int i = 0; i < GOLDEN_RECAPTURE_BUTTON_COUNT; ++i)
         PLACE_CONTROL(g.recapture_buttons[i], layout.recapture_buttons[i]);
     PLACE_CONTROL(g.status, layout.status);
+    RECT namespace_status = layout.status;
+    namespace_status.left = max(namespace_status.left,
+        namespace_status.right - golden_scale_ui(330, GetDpiForWindow(hwnd)));
+    PLACE_CONTROL(g.namespace_status, namespace_status);
 #undef PLACE_CONTROL
     RedrawWindow(hwnd, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
 }
@@ -3916,6 +4074,9 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         g.status = CreateWindowW(L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_LEFT | SS_CENTERIMAGE,
             0, 0, 0, 0, hwnd, NULL, g.instance, NULL);
+        g.namespace_status = CreateWindowW(L"STATIC", L"",
+            WS_CHILD | WS_VISIBLE | SS_RIGHT | SS_CENTERIMAGE | SS_NOPREFIX,
+            0, 0, 0, 0, hwnd, NULL, g.instance, NULL);
         g.left_splitter = CreateWindowW(L"GoldensSplitter", NULL,
             WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd,
             (HMENU)ID_SPLITTER_LEFT, g.instance, NULL);
@@ -3926,6 +4087,7 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             refresh_resources();
         }
         update_status();
+        update_namespace_status();
         update_tool_availability();
         set_capture_hotkey_enabled(g.capture_hotkey_enabled, TRUE);
         set_recapture_hotkey_enabled(g.recapture_hotkey_enabled, TRUE);
@@ -4022,6 +4184,11 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         break;
     }
     case WM_CTLCOLORSTATIC:
+        if ((HWND)lp == g.namespace_status) {
+            SetBkColor((HDC)wp, GetSysColor(COLOR_BTNFACE));
+            SetTextColor((HDC)wp, RGB(190, 0, 0));
+            return (LRESULT)GetSysColorBrush(COLOR_BTNFACE);
+        }
         if ((HWND)lp == g.context_label) {
             SetBkMode((HDC)wp, TRANSPARENT);
             SetTextColor((HDC)wp,
@@ -4075,6 +4242,19 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     case WM_NOTIFY: {
         NMHDR *header = (NMHDR *)lp;
+        if (header->idFrom == ID_TREE && header->code == NM_CUSTOMDRAW) {
+            NMTVCUSTOMDRAW *draw = (NMTVCUSTOMDRAW *)lp;
+            if (draw->nmcd.dwDrawStage == CDDS_PREPAINT)
+                return CDRF_NOTIFYITEMDRAW;
+            if (draw->nmcd.dwDrawStage == CDDS_ITEMPREPAINT) {
+                ResourceTreeNode *node =
+                    (ResourceTreeNode *)draw->nmcd.lItemlParam;
+                if (node && node->kind == RESOURCE_ANNOTATION &&
+                    node->annotation_collision)
+                    draw->clrText = RGB(190, 0, 0);
+            }
+            return CDRF_DODEFAULT;
+        }
         if (header->idFrom == ID_TREE && header->code == TVN_BEGINLABELEDITW) {
             NMTVDISPINFOW *edit = (NMTVDISPINFOW *)lp;
             ResourceTreeNode *node = tree_node_data(edit->item.hItem);
@@ -4098,10 +4278,13 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 name[_countof(name) - 1] = 0;
                 trim_text(name);
                 if (!name[0]) { show_error(L"The annotation name cannot be empty."); return FALSE; }
-                if (annotation_name_exists(name, node->annotation_index)) {
-                    show_error(L"That annotation name is already used in this image.");
+                if (!golden_annotation_name_valid(name)) {
+                    show_error(L"Annotation names cannot contain '/' or '\\' because those characters separate namespaces.");
                     return FALSE;
                 }
+                BOOL available = FALSE;
+                if (!annotation_name_available(
+                        name, node->annotation_index, &available)) return FALSE;
                 if (wcscmp(name, g.annotations[node->annotation_index].name)) {
                     g.selected = node->annotation_index;
                     if (!push_undo()) return FALSE;
@@ -4109,8 +4292,8 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     update_dirty_state();
                     update_tool_availability();
                     InvalidateRect(g.editor, NULL, FALSE);
-                    PostMessageW(g.main, WM_ANNOTATION_RENAMED, 0, 0);
                 }
+                PostMessageW(g.main, WM_ANNOTATION_RENAMED, 0, 0);
                 return TRUE;
             }
             return FALSE;
@@ -4173,7 +4356,11 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_CLOSE:
         if (g.recapture_review) cancel_recapture();
-        if (maybe_save()) DestroyWindow(hwnd);
+        if (maybe_save() && (!g.namespace_collision ||
+            MessageBoxW(g.main,
+                L"One or more folder namespaces contain duplicate annotation names. The Python loader will reject those ambiguous identifiers.\n\nClose Goldens anyway?",
+                APP_NAME, MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) == IDYES))
+            DestroyWindow(hwnd);
         return 0;
     case WM_DESTROY:
         if (g.capture_hotkey_registered)

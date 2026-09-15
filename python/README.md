@@ -56,9 +56,9 @@ calculator = automation.find_window(
 targets = Goldens.from_png(Path("calculator.png"))
 
 calculator.focus()
-calculator.click(targets["calculator/button_1"])
-calculator.click(targets["calculator/button_plus"])
-calculator.click(targets["calculator/button_2"])
+calculator.click(targets["button_1"])
+calculator.click(targets["button_plus"])
+calculator.click(targets["button_2"])
 calculator.press("enter")
 ```
 
@@ -139,27 +139,31 @@ login.png
 login.json
 ```
 
-`Goldens.from_png()` validates one pair and qualifies every annotation with the
-PNG stem:
+`Goldens.from_png()` validates one explicit pair and exposes its annotations
+without a namespace prefix:
 
 ```python
 targets = Goldens.from_png("login.png")
-submit = targets["login/submit"]
+submit = targets["submit"]
 ```
 
 `Goldens.from_root()` recursively discovers annotated PNGs below a resource
-root. Each identifier uses the PNG's root-relative path without its extension,
-with `/` on every platform:
+root. Each folder is a namespace, so identifiers use the annotation's parent
+folder relative to the root, with `/` on every platform. PNG filenames never
+appear in identifiers:
 
 ```python
 targets = Goldens.from_root(Path("resources"))
-submit = targets["dialogs/login/submit"]
+submit = targets["dialogs/submit"]
 ```
 
 Both forms expose copied, read-only crops through normal mapping operations.
 PNG files without an adjacent JSON sidecar are skipped during root discovery.
-Annotation names cannot contain `/`, and identifiers differing only by case are
-rejected so the mapping remains safe on Windows filesystems.
+Annotation names must be unique across all sidecars in one folder and cannot
+contain `/` or `\\`. Identifiers differing only by case are rejected so the
+mapping remains safe on Windows filesystems. Nested folders naturally create
+nested namespaces such as `homepage/account/submit`; annotations directly in
+the root use bare identifiers such as `submit`.
 
 The primary visual operations take fresh captures and retain no target or match
 state on the window:

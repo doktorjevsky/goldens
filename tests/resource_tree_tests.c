@@ -38,9 +38,9 @@ int main(void) {
 
     wchar_t root_path[] = L"C:\\goldens";
     wchar_t png_path[] = L"C:\\goldens\\image.png";
-    ResourceTreeNode root = {RESOURCE_DIRECTORY, root_path, -1};
-    ResourceTreeNode png = {RESOURCE_PNG, png_path, -1};
-    ResourceTreeNode annotation = {RESOURCE_ANNOTATION, NULL, 0};
+    ResourceTreeNode root = {RESOURCE_DIRECTORY, root_path, -1, FALSE};
+    ResourceTreeNode png = {RESOURCE_PNG, png_path, -1, FALSE};
+    ResourceTreeNode annotation = {RESOURCE_ANNOTATION, NULL, 0, FALSE};
     HTREEITEM root_item = insert_item(tree, TVI_ROOT, L"goldens", &root);
     HTREEITEM png_item = insert_item(tree, root_item, L"image.png", &png);
     HTREEITEM annotation_item = insert_item(

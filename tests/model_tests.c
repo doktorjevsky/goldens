@@ -25,6 +25,10 @@ static void test_annotation_names(void) {
     wchar_t name[128];
     golden_make_unique_name(items, 2, name, 128);
     CHECK(wcscmp(name, L"annotation_4") == 0);
+    CHECK(golden_annotation_name_valid(L"submit_button"));
+    CHECK(!golden_annotation_name_valid(L""));
+    CHECK(!golden_annotation_name_valid(L"dialog/submit"));
+    CHECK(!golden_annotation_name_valid(L"dialog\\submit"));
 }
 
 static void test_rectangles_and_clicks(void) {
@@ -85,7 +89,7 @@ static void test_document_round_trip(void) {
     source[0].has_click = TRUE;
     source[0].click_x = 0.25;
     source[0].click_y = 0.75;
-    wcscpy(source[1].name, L"status\\label");
+    wcscpy(source[1].name, L"status label");
     source[1].boundary = (RECT){1, 2, 4, 6};
     size_t length = 0;
     char *json = golden_document_serialize_utf8(source, 2, &length);
@@ -114,7 +118,7 @@ static void test_document_special_names(void) {
     wcscpy(source[0].name, L"name");
     wcscpy(source[1].name, L"click");
     wcscpy(source[2].name, L"boundary");
-    wcscpy(source[3].name, L"quoted \"name\" and \\ slash");
+    wcscpy(source[3].name, L"quoted \"name\"");
     source[4].name[0] = L'c';
     source[4].name[1] = 1;
     source[4].name[2] = L'x';
@@ -175,6 +179,8 @@ static void test_document_rejects_invalid_json(void) {
     check_invalid_document("{\"annotations\":[{\"name\":\"bad\\q\",\"boundary\":{\"x\":0,\"y\":0,\"width\":1,\"height\":1}}]}");
     check_invalid_document("{\"annotations\":[{\"name\":\"bad\\ud800\",\"boundary\":{\"x\":0,\"y\":0,\"width\":1,\"height\":1}}]}");
     check_invalid_document("{\"annotations\":[{\"name\":\"\",\"boundary\":{\"x\":0,\"y\":0,\"width\":1,\"height\":1}}]}");
+    check_invalid_document("{\"annotations\":[{\"name\":\"folder/name\",\"boundary\":{\"x\":0,\"y\":0,\"width\":1,\"height\":1}}]}");
+    check_invalid_document("{\"annotations\":[{\"name\":\"folder\\\\name\",\"boundary\":{\"x\":0,\"y\":0,\"width\":1,\"height\":1}}]}");
     check_invalid_document("{\"annotations\":[{\"name\":\"x\",\"name\":\"y\",\"boundary\":{\"x\":0,\"y\":0,\"width\":1,\"height\":1}}]}");
     check_invalid_document("{\"annotations\":[{\"name\":\"x\",\"boundary\":{\"x\":0,\"x\":1,\"y\":0,\"width\":1,\"height\":1}}]}");
     check_invalid_document("{\"annotations\":[{\"name\":\"x\",\"boundary\":{\"x\":2147483647,\"y\":0,\"width\":1,\"height\":1}}]}");
@@ -187,20 +193,23 @@ static void test_document_rejects_invalid_json(void) {
     check_invalid_document(unescaped_control);
 }
 
-static void test_document_rejects_duplicates_and_truncation(void) {
+static void test_document_accepts_duplicates_and_rejects_truncation(void) {
     const char *duplicates =
         "{\"annotations\":["
         "{\"name\":\"Same\",\"boundary\":{\"x\":0,\"y\":0,\"width\":1,\"height\":1}},"
         "{\"name\":\"same\",\"boundary\":{\"x\":1,\"y\":1,\"width\":1,\"height\":1}}]}";
-    check_invalid_document(duplicates);
+    Annotation parsed[MAX_ANNOTATIONS] = {0};
+    int count = MAX_ANNOTATIONS;
+    CHECK(parse_document(duplicates, parsed, &count));
+    CHECK(count == 2);
 
     const char *two =
         "{\"annotations\":["
         "{\"name\":\"one\",\"boundary\":{\"x\":0,\"y\":0,\"width\":1,\"height\":1}},"
         "{\"name\":\"two\",\"boundary\":{\"x\":1,\"y\":1,\"width\":1,\"height\":1}}]}";
-    Annotation parsed[1] = {0};
-    int count = 1;
-    CHECK(!parse_document(two, parsed, &count));
+    Annotation parsed_small[1] = {0};
+    int count_small = 1;
+    CHECK(!parse_document(two, parsed_small, &count_small));
 }
 
 static void test_document_rejects_invalid_model(void) {
@@ -217,11 +226,15 @@ static void test_document_rejects_invalid_model(void) {
     annotation.has_click = FALSE;
     annotation.boundary.right = annotation.boundary.left;
     CHECK(golden_document_serialize_utf8(&annotation, 1, NULL) == NULL);
-    Annotation duplicates[2] = {0};
-    wcscpy(duplicates[0].name, L"duplicate");
-    wcscpy(duplicates[1].name, L"DUPLICATE");
-    duplicates[0].boundary = duplicates[1].boundary = (RECT){0, 0, 1, 1};
-    CHECK(golden_document_serialize_utf8(duplicates, 2, NULL) == NULL);
+    Annotation duplicates_to_serialize[2] = {0};
+    wcscpy(duplicates_to_serialize[0].name, L"duplicate");
+    wcscpy(duplicates_to_serialize[1].name, L"DUPLICATE");
+    duplicates_to_serialize[0].boundary =
+        duplicates_to_serialize[1].boundary = (RECT){0, 0, 1, 1};
+    char *duplicates_json = golden_document_serialize_utf8(
+        duplicates_to_serialize, 2, NULL);
+    CHECK(duplicates_json != NULL);
+    free(duplicates_json);
 
     for (size_t i = 0; i < _countof(annotation.name); ++i)
         annotation.name[i] = L'x';
@@ -358,7 +371,7 @@ int main(void) {
     test_document_special_names();
     test_document_valid_variants();
     test_document_rejects_invalid_json();
-    test_document_rejects_duplicates_and_truncation();
+    test_document_accepts_duplicates_and_rejects_truncation();
     test_document_rejects_invalid_model();
     test_document_control_characters();
     test_document_truncation_and_utf8();

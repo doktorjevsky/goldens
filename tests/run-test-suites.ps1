@@ -9,6 +9,7 @@ $suites = @(
     "tooltip",
     "resource_tree",
     "resource_ops",
+    "namespace",
     "resource_watcher",
     "history",
     "atomic_file",

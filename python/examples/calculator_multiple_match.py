@@ -21,11 +21,11 @@ def main() -> None:
     targets = Goldens.from_root(example_dir)
 
     for _ in range(6):
-        calculator.click(targets["calculator/button_1"])
+        calculator.click(targets["button_1"])
     print("Pressed button_1 six times")
 
     try:
-        calculator.locate(targets["calculator_ones/multiple_match"])
+        calculator.locate(targets["multiple_match"])
     except TargetAmbiguousError as error:
         print(
             f"Target {error.target.name!r} matched "

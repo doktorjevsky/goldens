@@ -14,6 +14,7 @@ typedef struct {
     ResourceNodeKind kind;
     wchar_t *path;
     int annotation_index;
+    BOOL annotation_collision;
 } ResourceTreeNode;
 
 const wchar_t *golden_resource_tree_selected_directory(HWND tree);

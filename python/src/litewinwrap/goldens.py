@@ -150,13 +150,17 @@ def _read_target(
         raise GoldensFormatError(
             f"Annotation {name!r} contains '/', which is reserved for namespaces"
         )
+    if "\\" in name:
+        raise GoldensFormatError(
+            f"Annotation {name!r} contains '\\', which is reserved for namespaces"
+        )
 
     image_height, image_width = image.shape[:2]
     x, y, width, height = _read_boundary(value, name, image_width, image_height)
     pixels = image[y : y + height, x : x + width].copy()
     pixels.setflags(write=False)
     return Target(
-        name=f"{namespace}/{name}",
+        name=f"{namespace}/{name}" if namespace else name,
         pixels=pixels,
         click=_read_click(value, name),
     )
@@ -228,12 +232,12 @@ class Goldens(Mapping[str, Target]):
 
     @classmethod
     def from_png(cls, png: str | Path) -> Goldens:
-        """Load one PNG/JSON pair using the PNG stem as its namespace."""
+        """Load one PNG/JSON pair with bare annotation identifiers."""
 
         path = Path(png)
         if path.suffix.casefold() != ".png":
             raise GoldensFormatError(f"Golden image must be a PNG: {path}")
-        return cls._from_resources([(path, path.stem)], root=None)
+        return cls._from_resources([(path, "")], root=None)
 
     @classmethod
     def from_root(cls, root: str | Path) -> Goldens:
@@ -247,7 +251,9 @@ class Goldens(Mapping[str, Target]):
         resources = [
             (
                 png,
-                png.relative_to(root_path).with_suffix("").as_posix(),
+                ""
+                if png.parent == root_path
+                else png.parent.relative_to(root_path).as_posix(),
             )
             for png in _pngs_below(root_path)
         ]

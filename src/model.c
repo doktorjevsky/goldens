@@ -10,6 +10,10 @@ BOOL golden_name_exists(const Annotation *items, int count, const wchar_t *name,
     return FALSE;
 }
 
+BOOL golden_annotation_name_valid(const wchar_t *name) {
+    return name && name[0] && !wcspbrk(name, L"/\\");
+}
+
 void golden_make_unique_name(const Annotation *items, int count, wchar_t *out, size_t capacity) {
     int suffix = count + 1;
     do { _snwprintf(out, capacity, L"annotation_%d", suffix++); }
