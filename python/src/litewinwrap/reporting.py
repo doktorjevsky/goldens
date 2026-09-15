@@ -431,6 +431,7 @@ def _result_details(
         return (
             {
                 "match_score": result.score,
+                "match_scale": result.scale,
                 "match_rect": _rect_value(result.rect),
                 "point": _point_value(result.click),
             },
@@ -447,6 +448,7 @@ def _result_details(
             details["matches"] = [
                 {
                     "score": item.score,
+                    "scale": item.scale,
                     "rect": _rect_value(item.rect),
                     "click": _point_value(item.click),
                 }
@@ -791,6 +793,7 @@ def _failure_details(error: Exception) -> dict[str, Any]:
         details["matches"] = [
             {
                 "score": item.score,
+                "scale": item.scale,
                 "rect": _rect_value(item.rect),
                 "click": _point_value(item.click),
             }

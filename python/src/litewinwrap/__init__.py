@@ -1,5 +1,6 @@
 from . import keyboard, match, mouse, reporting, win32
 from .automation import Automation
+from .display import Display, DisplayScaleRestartRequired
 from .goldens import Goldens, GoldensFormatError
 from .match import TargetAmbiguousError, TargetNotFoundError
 from .reporting import Reports
@@ -17,6 +18,8 @@ __all__ = [
     "__version__",
     "Automation",
     "Capture",
+    "Display",
+    "DisplayScaleRestartRequired",
     "FocusTimeoutError",
     "Goldens",
     "GoldensFormatError",

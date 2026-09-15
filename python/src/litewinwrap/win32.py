@@ -3,7 +3,7 @@ from __future__ import annotations
 import ctypes
 import sys
 from ctypes import wintypes
-from typing import Iterable
+from typing import Iterable, NamedTuple
 
 from .types import HWND, Point, Rect
 
@@ -37,9 +37,20 @@ BI_RGB = 0
 DIB_RGB_COLORS = 0
 SRCCOPY = 0x00CC0020
 CAPTUREBLT = 0x40000000
+MONITORINFOF_PRIMARY = 0x00000001
+MDT_EFFECTIVE_DPI = 0
 
 
 ULONG_PTR = ctypes.c_size_t
+HMONITOR = wintypes.HANDLE
+
+
+class DisplayInfo(NamedTuple):
+    name: str
+    rect: Rect
+    work_area: Rect
+    primary: bool
+    dpi: int
 
 
 class HARDWAREINPUT(ctypes.Structure):
@@ -119,18 +130,37 @@ class BITMAPINFO(ctypes.Structure):
     ]
 
 
+class MONITORINFOEXW(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", wintypes.DWORD),
+        ("rcMonitor", wintypes.RECT),
+        ("rcWork", wintypes.RECT),
+        ("dwFlags", wintypes.DWORD),
+        ("szDevice", wintypes.WCHAR * 32),
+    ]
+
+
 _IS_WINDOWS = sys.platform == "win32"
 _user32: ctypes.WinDLL | None = None  # type: ignore[attr-defined]
 _gdi32: ctypes.WinDLL | None = None  # type: ignore[attr-defined]
 _dwmapi: ctypes.WinDLL | None = None  # type: ignore[attr-defined]
+_shcore: ctypes.WinDLL | None = None  # type: ignore[attr-defined]
 
 
 if _IS_WINDOWS:
     _user32 = ctypes.WinDLL("user32", use_last_error=True)
     _gdi32 = ctypes.WinDLL("gdi32", use_last_error=True)
     _dwmapi = ctypes.WinDLL("dwmapi", use_last_error=True)
+    _shcore = ctypes.WinDLL("shcore", use_last_error=True)
 
     WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    MONITORENUMPROC = ctypes.WINFUNCTYPE(
+        wintypes.BOOL,
+        HMONITOR,
+        wintypes.HDC,
+        ctypes.POINTER(wintypes.RECT),
+        wintypes.LPARAM,
+    )
 
     _user32.IsWindow.argtypes = (wintypes.HWND,)
     _user32.IsWindow.restype = wintypes.BOOL
@@ -157,7 +187,10 @@ if _IS_WINDOWS:
     _user32.GetWindowRect.restype = wintypes.BOOL
     _user32.GetParent.argtypes = (wintypes.HWND,)
     _user32.GetParent.restype = wintypes.HWND
-    _user32.GetWindowThreadProcessId.argtypes = (wintypes.HWND, ctypes.POINTER(wintypes.DWORD))
+    _user32.GetWindowThreadProcessId.argtypes = (
+        wintypes.HWND,
+        ctypes.POINTER(wintypes.DWORD),
+    )
     _user32.GetWindowThreadProcessId.restype = wintypes.DWORD
 
     _user32.GetForegroundWindow.argtypes = ()
@@ -186,6 +219,15 @@ if _IS_WINDOWS:
 
     _user32.GetSystemMetrics.argtypes = (ctypes.c_int,)
     _user32.GetSystemMetrics.restype = ctypes.c_int
+    _user32.EnumDisplayMonitors.argtypes = (
+        wintypes.HDC,
+        ctypes.POINTER(wintypes.RECT),
+        MONITORENUMPROC,
+        wintypes.LPARAM,
+    )
+    _user32.EnumDisplayMonitors.restype = wintypes.BOOL
+    _user32.GetMonitorInfoW.argtypes = (HMONITOR, ctypes.POINTER(MONITORINFOEXW))
+    _user32.GetMonitorInfoW.restype = wintypes.BOOL
     _user32.GetCursorPos.argtypes = (ctypes.POINTER(wintypes.POINT),)
     _user32.GetCursorPos.restype = wintypes.BOOL
     _user32.GetDoubleClickTime.argtypes = ()
@@ -243,6 +285,14 @@ if _IS_WINDOWS:
     )
     _dwmapi.DwmGetWindowAttribute.restype = ctypes.c_long
 
+    _shcore.GetDpiForMonitor.argtypes = (
+        HMONITOR,
+        ctypes.c_int,
+        ctypes.POINTER(wintypes.UINT),
+        ctypes.POINTER(wintypes.UINT),
+    )
+    _shcore.GetDpiForMonitor.restype = ctypes.c_long
+
 
 def _require_windows() -> None:
     if not _IS_WINDOWS:
@@ -268,6 +318,92 @@ def enable_per_monitor_dpi_awareness() -> bool:
     if ctypes.get_last_error() == 5:  # Already fixed by a manifest or earlier API call.
         return False
     raise _last_error("SetProcessDpiAwarenessContext")
+
+
+def enum_displays() -> tuple[DisplayInfo, ...]:
+    """Return the active displays and their effective DPI."""
+
+    _require_windows()
+    assert _user32 is not None and _shcore is not None
+    enable_per_monitor_dpi_awareness()
+    displays: list[DisplayInfo] = []
+    callback_errors: list[Exception] = []
+
+    @MONITORENUMPROC
+    def callback(
+        monitor: int,
+        _dc: int,
+        _rect: ctypes.POINTER(wintypes.RECT),
+        _parameter: int,
+    ) -> bool:
+        try:
+            info = MONITORINFOEXW()
+            info.cbSize = ctypes.sizeof(info)
+            ctypes.set_last_error(0)
+            if not _user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
+                raise _last_error("GetMonitorInfoW")
+
+            dpi_x = wintypes.UINT()
+            dpi_y = wintypes.UINT()
+            status = _shcore.GetDpiForMonitor(
+                monitor,
+                MDT_EFFECTIVE_DPI,
+                ctypes.byref(dpi_x),
+                ctypes.byref(dpi_y),
+            )
+            if status:
+                raise OSError(
+                    f"GetDpiForMonitor failed with HRESULT 0x{status & 0xFFFFFFFF:08X}"
+                )
+
+            displays.append(
+                DisplayInfo(
+                    name=info.szDevice,
+                    rect=Rect(
+                        info.rcMonitor.left,
+                        info.rcMonitor.top,
+                        info.rcMonitor.right,
+                        info.rcMonitor.bottom,
+                    ),
+                    work_area=Rect(
+                        info.rcWork.left,
+                        info.rcWork.top,
+                        info.rcWork.right,
+                        info.rcWork.bottom,
+                    ),
+                    primary=bool(info.dwFlags & MONITORINFOF_PRIMARY),
+                    dpi=int(dpi_x.value),
+                )
+            )
+            return True
+        except Exception as error:
+            callback_errors.append(error)
+            return False
+
+    ctypes.set_last_error(0)
+    enumerated = _user32.EnumDisplayMonitors(None, None, callback, 0)
+    if callback_errors:
+        raise callback_errors[0]
+    if not enumerated:
+        raise _last_error("EnumDisplayMonitors")
+    return tuple(displays)
+
+
+def configure_global_display_scale(scale: float) -> None:
+    """Configure one user scale for all displays, effective after sign-out."""
+
+    _require_windows()
+    import winreg
+
+    dpi = round(96 * scale)
+    with winreg.OpenKey(
+        winreg.HKEY_CURRENT_USER,
+        r"Control Panel\Desktop",
+        0,
+        winreg.KEY_SET_VALUE,
+    ) as key:
+        winreg.SetValueEx(key, "Win8DpiScaling", 0, winreg.REG_DWORD, 1)
+        winreg.SetValueEx(key, "LogPixels", 0, winreg.REG_DWORD, dpi)
 
 
 def is_window(hwnd: HWND | int) -> bool:

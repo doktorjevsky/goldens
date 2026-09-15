@@ -13,6 +13,7 @@ from .window import Window
 
 _POLL_INTERVAL_SECONDS = 0.05
 _POST_CLICK_DELAY_SECONDS = 0.15
+_MAX_TARGET_SCALES = 101
 
 
 class TargetNotFoundError(LookupError):
@@ -83,15 +84,67 @@ def _validate(capture_value: Capture, target: Target, threshold: float) -> None:
         raise ValueError("Capture rectangle does not match its pixel dimensions")
     if target_width <= 0 or target_height <= 0:
         raise ValueError("Target image is empty")
-    if target_width > image_width or target_height > image_height:
-        raise ValueError(
-            f"Target {target_width}x{target_height} is larger than "
-            f"capture {image_width}x{image_height}"
-        )
     if target.click is not None and not all(
         0.0 <= value <= 1.0 for value in target.click
     ):
         raise ValueError("Target click coordinates must be between 0 and 1")
+
+
+def _scale_values(tolerance: float, step: float) -> tuple[float, ...]:
+    tolerance = float(tolerance)
+    step = float(step)
+    if not isfinite(tolerance) or not 0.0 <= tolerance < 1.0:
+        raise ValueError(
+            "Target scale tolerance must be finite, at least 0, and less than 1"
+        )
+    if not isfinite(step) or step <= 0.0:
+        raise ValueError("Target scale step must be a finite positive number")
+    if tolerance == 0.0:
+        return (1.0,)
+    scale_count = 2 * int(np.ceil(tolerance / step)) + 1
+    if scale_count > _MAX_TARGET_SCALES:
+        raise ValueError(
+            f"Target scale search may evaluate at most {_MAX_TARGET_SCALES} scales"
+        )
+
+    offsets: list[float] = []
+    offset = step
+    while offset < tolerance:
+        offsets.append(offset)
+        offset += step
+    if not offsets or not np.isclose(offsets[-1], tolerance):
+        offsets.append(tolerance)
+
+    values = [1.0]
+    for offset in offsets:
+        values.extend((1.0 - offset, 1.0 + offset))
+    return tuple(values)
+
+
+def _scaled_targets(
+    target: Target,
+    tolerance: float,
+    step: float,
+) -> tuple[tuple[Target, float], ...]:
+    height, width = target.pixels.shape[:2]
+    variants: list[tuple[Target, float]] = []
+    dimensions: set[tuple[int, int]] = set()
+    for scale in _scale_values(tolerance, step):
+        scaled_width = max(1, round(width * scale))
+        scaled_height = max(1, round(height * scale))
+        size = (scaled_width, scaled_height)
+        if size in dimensions:
+            continue
+        dimensions.add(size)
+        if size == (width, height):
+            variants.append((target, scale))
+            continue
+
+        interpolation = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
+        pixels = cv2.resize(target.pixels, size, interpolation=interpolation)
+        pixels.setflags(write=False)
+        variants.append((Target(target.name, pixels, target.click), scale))
+    return tuple(variants)
 
 
 def _score_map(capture_value: Capture, target: Target) -> np.ndarray:
@@ -147,6 +200,8 @@ def _matches_and_best_score(
     threshold: float,
     overlap: float,
     max_candidates: int,
+    target_scale_tolerance: float,
+    target_scale_step: float,
 ) -> tuple[tuple[Match, ...], float]:
     _validate(capture_value, target, threshold)
     if not 0.0 <= overlap < 1.0:
@@ -154,45 +209,83 @@ def _matches_and_best_score(
     if max_candidates <= 0:
         raise ValueError("Maximum candidate count must be positive")
 
-    scores = _score_map(capture_value, target)
-    best_score = float(scores.max())
-    ys, xs = np.nonzero(scores >= threshold)
-    if not len(xs):
-        return (), best_score
-
-    candidate_scores = scores[ys, xs]
-    if len(xs) > max_candidates:
-        selected = np.argpartition(candidate_scores, -max_candidates)[-max_candidates:]
-        xs, ys = xs[selected], ys[selected]
-        candidate_scores = candidate_scores[selected]
-    order = np.argsort(candidate_scores)[::-1]
-
-    target_height, target_width = target.pixels.shape[:2]
+    variants = _scaled_targets(
+        target,
+        target_scale_tolerance,
+        target_scale_step,
+    )
+    image_height, image_width = capture_value.pixels.shape[:2]
     click_x, click_y = target.click or (0.5, 0.5)
-    matches: list[Match] = []
-    for index in order:
-        left = capture_value.rect.left + int(xs[index])
-        top = capture_value.rect.top + int(ys[index])
-        rect = Rect(left, top, left + target_width, top + target_height)
-        if any(_intersection_over_union(rect, item.rect) > overlap for item in matches):
+    candidates: list[Match] = []
+    best_score = -1.0
+    fitting_variants = 0
+
+    for scaled_target, scale in variants:
+        target_height, target_width = scaled_target.pixels.shape[:2]
+        if target_width > image_width or target_height > image_height:
+            continue
+        fitting_variants += 1
+        scores = _score_map(capture_value, scaled_target)
+        best_score = max(best_score, float(scores.max()))
+        ys, xs = np.nonzero(scores >= threshold)
+        if not len(xs):
             continue
 
-        point = Point(
-            min(
-                rect.right - 1, max(rect.left, rect.left + int(target_width * click_x))
-            ),
-            min(
-                rect.bottom - 1, max(rect.top, rect.top + int(target_height * click_y))
-            ),
-        )
-        matches.append(
-            Match(
-                target=target.name,
-                score=float(candidate_scores[index]),
-                rect=rect,
-                click=point,
+        candidate_scores = scores[ys, xs]
+        if len(xs) > max_candidates:
+            selected = np.argpartition(candidate_scores, -max_candidates)[
+                -max_candidates:
+            ]
+            xs, ys = xs[selected], ys[selected]
+            candidate_scores = candidate_scores[selected]
+
+        for index in np.argsort(candidate_scores)[::-1]:
+            left = capture_value.rect.left + int(xs[index])
+            top = capture_value.rect.top + int(ys[index])
+            rect = Rect(left, top, left + target_width, top + target_height)
+            point = Point(
+                min(
+                    rect.right - 1,
+                    max(rect.left, rect.left + int(target_width * click_x)),
+                ),
+                min(
+                    rect.bottom - 1,
+                    max(rect.top, rect.top + int(target_height * click_y)),
+                ),
             )
+            candidates.append(
+                Match(
+                    target=target.name,
+                    score=float(candidate_scores[index]),
+                    rect=rect,
+                    click=point,
+                    scale=scale,
+                )
+            )
+
+    if not fitting_variants:
+        smallest, _scale = min(
+            variants,
+            key=lambda item: item[0].pixels.shape[0] * item[0].pixels.shape[1],
         )
+        target_height, target_width = smallest.pixels.shape[:2]
+        raise ValueError(
+            f"Target {target_width}x{target_height} is larger than "
+            f"capture {image_width}x{image_height}"
+        )
+    if not candidates:
+        return (), best_score
+
+    candidates.sort(key=lambda item: item.score, reverse=True)
+    candidates = candidates[:max_candidates]
+    matches: list[Match] = []
+    for candidate in candidates:
+        if any(
+            _intersection_over_union(candidate.rect, item.rect) > overlap
+            for item in matches
+        ):
+            continue
+        matches.append(candidate)
     return tuple(matches), best_score
 
 
@@ -204,6 +297,8 @@ def match_all(
     threshold: float = 0.90,
     overlap: float = 0.30,
     max_candidates: int = 10_000,
+    target_scale_tolerance: float = 0.0,
+    target_scale_step: float = 0.02,
 ) -> tuple[Match, ...]:
     """Return every distinct target match in an existing capture."""
 
@@ -213,6 +308,8 @@ def match_all(
         threshold=threshold,
         overlap=overlap,
         max_candidates=max_candidates,
+        target_scale_tolerance=target_scale_tolerance,
+        target_scale_step=target_scale_step,
     )
     return matches
 
@@ -241,6 +338,8 @@ def match(
     threshold: float = 0.90,
     overlap: float = 0.30,
     max_candidates: int = 10_000,
+    target_scale_tolerance: float = 0.0,
+    target_scale_step: float = 0.02,
 ) -> Match:
     """Return the only target match, rejecting zero or multiple matches."""
 
@@ -250,6 +349,8 @@ def match(
         threshold=threshold,
         overlap=overlap,
         max_candidates=max_candidates,
+        target_scale_tolerance=target_scale_tolerance,
+        target_scale_step=target_scale_step,
     )
     if len(matches) == 1:
         return matches[0]
@@ -266,6 +367,8 @@ def best_match(
     threshold: float = 0.90,
     overlap: float = 0.30,
     max_candidates: int = 10_000,
+    target_scale_tolerance: float = 0.0,
+    target_scale_step: float = 0.02,
 ) -> Match:
     """Return the highest-scoring target match in an existing capture."""
 
@@ -275,6 +378,8 @@ def best_match(
         threshold=threshold,
         overlap=overlap,
         max_candidates=max_candidates,
+        target_scale_tolerance=target_scale_tolerance,
+        target_scale_step=target_scale_step,
     )
     if matches:
         return matches[0]
@@ -289,6 +394,8 @@ def find_all(
     threshold: float = 0.90,
     timeout_seconds: float = 0.0,
     overlap: float = 0.30,
+    target_scale_tolerance: float = 0.0,
+    target_scale_step: float = 0.02,
 ) -> tuple[Match, ...]:
     deadline_seconds = time.monotonic() + max(0.0, timeout_seconds)
     while True:
@@ -299,6 +406,8 @@ def find_all(
             threshold=threshold,
             overlap=overlap,
             max_candidates=10_000,
+            target_scale_tolerance=target_scale_tolerance,
+            target_scale_step=target_scale_step,
         )
         if matches:
             return matches
@@ -318,6 +427,8 @@ def find(
     timeout_seconds: float = 0.0,
     overlap: float = 0.30,
     retry_on_ambiguity: bool = False,
+    target_scale_tolerance: float = 0.0,
+    target_scale_step: float = 0.02,
 ) -> Match:
     """Wait for one target match, optionally retrying transient ambiguity."""
 
@@ -336,6 +447,8 @@ def find(
             threshold=threshold,
             overlap=overlap,
             max_candidates=10_000,
+            target_scale_tolerance=target_scale_tolerance,
+            target_scale_step=target_scale_step,
         )
         best_score = max(best_score, current_best)
         if len(matches) == 1:
@@ -367,6 +480,8 @@ def find_best(
     threshold: float = 0.90,
     timeout_seconds: float = 0.0,
     overlap: float = 0.30,
+    target_scale_tolerance: float = 0.0,
+    target_scale_step: float = 0.02,
 ) -> Match:
     started_seconds = time.monotonic()
     deadline_seconds = started_seconds + max(0.0, timeout_seconds)
@@ -383,6 +498,8 @@ def find_best(
             threshold=threshold,
             overlap=overlap,
             max_candidates=10_000,
+            target_scale_tolerance=target_scale_tolerance,
+            target_scale_step=target_scale_step,
         )
         best_score = max(best_score, current_best)
         if matches:
@@ -411,6 +528,8 @@ def click(
     timeout_seconds: float = 0.0,
     overlap: float = 0.30,
     retry_on_ambiguity: bool = False,
+    target_scale_tolerance: float = 0.0,
+    target_scale_step: float = 0.02,
     button: mouse.Button = "left",
     wait_after_seconds: float = _POST_CLICK_DELAY_SECONDS,
 ) -> Match:
@@ -423,6 +542,8 @@ def click(
         timeout_seconds=timeout_seconds,
         overlap=overlap,
         retry_on_ambiguity=retry_on_ambiguity,
+        target_scale_tolerance=target_scale_tolerance,
+        target_scale_step=target_scale_step,
     )
     mouse.click(found.click, button=button)
     if wait_after_seconds:
@@ -438,6 +559,8 @@ def click_best(
     threshold: float = 0.90,
     timeout_seconds: float = 0.0,
     overlap: float = 0.30,
+    target_scale_tolerance: float = 0.0,
+    target_scale_step: float = 0.02,
     button: mouse.Button = "left",
     wait_after_seconds: float = _POST_CLICK_DELAY_SECONDS,
 ) -> Match:
@@ -449,6 +572,8 @@ def click_best(
         threshold=threshold,
         timeout_seconds=timeout_seconds,
         overlap=overlap,
+        target_scale_tolerance=target_scale_tolerance,
+        target_scale_step=target_scale_step,
     )
     mouse.click(found.click, button=button)
     if wait_after_seconds:
