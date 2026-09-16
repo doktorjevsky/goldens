@@ -1,10 +1,10 @@
-from . import keyboard, match, mouse, reporting, win32
+from . import keyboard, match, mouse, ocr, reporting, win32
 from .automation import Automation
 from .display import Display, DisplayScaleRestartRequired
 from .goldens import Goldens, GoldensFormatError, InconsistentGoldenScaleError
 from .match import TargetAmbiguousError, TargetNotFoundError
 from .reporting import Reports
-from .types import Capture, HWND, Match, Point, Rect, Target
+from .types import Capture, HWND, Match, Point, Rect, Target, TextMatch
 from .window import (
     FocusTimeoutError,
     Window,
@@ -32,6 +32,7 @@ __all__ = [
     "Target",
     "TargetAmbiguousError",
     "TargetNotFoundError",
+    "TextMatch",
     "Window",
     "WindowAmbiguousError",
     "WindowCloseTimeoutError",
@@ -39,8 +40,9 @@ __all__ = [
     "keyboard",
     "match",
     "mouse",
+    "ocr",
     "reporting",
     "win32",
 ]
 
-__version__ = "0.1.0a10"
+__version__ = "0.1.0a10+ocr"

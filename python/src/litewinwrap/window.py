@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 from . import keyboard, mouse, reporting, win32
 from .automation import TextSelector, _describe_selectors, _matches
 from .mouse import Button
-from .types import Capture, HWND, Match, Rect, Target
+from .types import Capture, HWND, Match, Rect, Target, TextMatch
 
 
 if TYPE_CHECKING:
@@ -167,6 +167,38 @@ class Window:
         from . import match as image_match
 
         return image_match.capture(self.hwnd)
+
+    @reporting._trace("Read window text")
+    def read_text(self, *, min_score: float = 0.5) -> tuple[TextMatch, ...]:
+        from . import ocr
+
+        return ocr.read(self.capture(), min_score=min_score)
+
+    @reporting._trace("Find window text")
+    def find_text(
+        self,
+        selector: TextSelector,
+        *,
+        min_score: float = 0.5,
+        timeout_seconds: float | None = None,
+    ) -> tuple[TextMatch, ...]:
+        from . import ocr
+
+        timeout_seconds = self.automation._resolve_timeout_seconds(timeout_seconds)
+        deadline_seconds = time.monotonic() + timeout_seconds
+        while True:
+            matches = ocr.find(
+                self.capture(),
+                selector,
+                min_score=min_score,
+            )
+            if matches:
+                return matches
+
+            remaining_seconds = deadline_seconds - time.monotonic()
+            if remaining_seconds <= 0:
+                return ()
+            time.sleep(min(_POLL_INTERVAL_SECONDS, remaining_seconds))
 
     @reporting._trace("Locate all target matches")
     def locate_all(

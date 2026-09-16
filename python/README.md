@@ -17,7 +17,7 @@ environment:
 ```powershell
 py -m venv C:\Tools\litewinwrap-env
 C:\Tools\litewinwrap-env\Scripts\python -m pip install `
-    C:\Transfer\litewinwrap-0.1.0a10-py3-none-any.whl
+    C:\Transfer\litewinwrap-0.1.0a10+ocr-py3-none-any.whl
 ```
 
 For editable development from this directory:
@@ -231,6 +231,48 @@ are treated as one physical occurrence, and the highest-scoring scale is kept.
 Set these values on `Automation` to use them as session defaults. Per-action
 values override the session, and an explicit tolerance of `0.0` requests exact
 matching. Exact matching remains the default.
+
+## OCR
+
+The bundled OCR models recognize upright Latin-script text and numbers without
+an external executable, a network request, or another inference dependency.
+Read a saved image, a BGR NumPy array, or an existing `Capture`:
+
+```python
+from litewinwrap import ocr
+
+items = ocr.read("dialog.png")
+for item in items:
+    print(item.text, item.score, item.rect)
+
+image = calculator.capture()
+hits = ocr.find(image, "Standard")
+```
+
+File and array results use image-local rectangles. A `Capture` retains the
+absolute origin of its pixels, so its OCR rectangles and center click points
+use screen coordinates. Results are returned in reading order as immutable
+`TextMatch` values containing `text`, `score`, `rect`, and `click`.
+
+The window convenience methods capture fresh pixels. `read_text()` performs
+one recognition pass; `find_text()` retries according to the session timeout
+until at least one exact match is present:
+
+```python
+matches = calculator.find_text("Standard")
+mouse.click(matches[0].click)
+```
+
+String selectors match exactly, as they do for window titles. Use a compiled
+regular expression for partial or case-insensitive matching:
+
+```python
+matches = calculator.find_text(re.compile(r"stand", re.IGNORECASE))
+```
+
+`min_score` defaults to `0.5` and can be supplied to `ocr.read()`,
+`ocr.find()`, `Window.read_text()`, or `Window.find_text()`. The models load
+on the first OCR call and remain cached for the process.
 
 ## Text and keys
 

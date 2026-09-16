@@ -1,5 +1,24 @@
 # Third-party notices
 
+## PaddleOCR and RapidOCR models
+
+The Python package bundles the following PaddleOCR models converted to ONNX
+and distributed by RapidOCR:
+
+- `en_PP-OCRv3_det_mobile.onnx`
+- `latin_PP-OCRv3_rec_mobile.onnx`
+- `latin_dict.txt`
+
+Copyright in the upstream model weights is held by Baidu and/or the applicable
+PaddleOCR rights holders. PaddleOCR and RapidOCR distribute these works under
+the Apache License, Version 2.0. Exact source URLs, SHA-256 values, attribution,
+and a complete copy of the license are included beside the models in
+`python/src/litewinwrap/models`.
+
+https://github.com/PaddlePaddle/PaddleOCR
+
+https://github.com/RapidAI/RapidOCR
+
 ## Microsoft Fluent UI System Icons
 
 The toolbar icons in `assets/icons` are copied from or derived from

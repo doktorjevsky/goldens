@@ -57,3 +57,13 @@ class Match:
     rect: Rect
     click: Point
     scale: float = 1.0
+
+
+@dataclass(frozen=True, slots=True)
+class TextMatch:
+    """One recognized text region in an image or screen capture."""
+
+    text: str
+    score: float
+    rect: Rect
+    click: Point
