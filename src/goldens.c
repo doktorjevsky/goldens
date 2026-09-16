@@ -120,6 +120,7 @@ typedef struct {
     BOOL recapture_show_annotations;
     GoldenImage recapture_image;
     GoldenRecaptureComparison recapture_comparison;
+    double recapture_scale;
     wchar_t recapture_target[MAX_PATH * 4];
     DWORD recapture_volume_serial;
     DWORD recapture_file_index_high;
@@ -146,6 +147,7 @@ typedef struct {
 
     Annotation annotations[MAX_ANNOTATIONS];
     int annotation_count;
+    GoldenDocumentMetadata document_metadata;
     int selected;
     BOOL dirty;
     Annotation saved_annotations[MAX_ANNOTATIONS];
@@ -270,8 +272,10 @@ static void discard_history_entry(GoldenHistoryEntry *entry, void *context) {
     }
     else if (entry->kind == GOLDEN_HISTORY_REPLACE_MOVE_PNG && entry->staged)
         delete_resource_pair(entry->auxiliary);
-    else if (entry->kind == GOLDEN_HISTORY_RECAPTURE_PNG && entry->staged)
+    else if (entry->kind == GOLDEN_HISTORY_RECAPTURE_PNG && entry->staged) {
         DeleteFileW(entry->destination);
+        DeleteFileW(entry->auxiliary);
+    }
 }
 
 static wchar_t *dup_wide(const wchar_t *value) {
@@ -680,14 +684,79 @@ static BOOL save_png_pixels(const wchar_t *path, BYTE *pixels, UINT width, UINT 
     return golden_png_save(g.wic, path, pixels, width, height, stride);
 }
 
+static char *read_sidecar_bytes(const wchar_t *path, size_t *length) {
+    *length = 0;
+    FILE *file = _wfopen(path, L"rb");
+    if (!file) return NULL;
+    char *text = NULL;
+    if (fseek(file, 0, SEEK_END) == 0) {
+        errno = 0;
+        long file_length = ftell(file);
+        if (file_length > 0 && file_length <= 16 * 1024 * 1024 &&
+            errno == 0 && fseek(file, 0, SEEK_SET) == 0) {
+            text = (char *)malloc((size_t)file_length + 1);
+            if (text) {
+                size_t got = fread(text, 1, (size_t)file_length, file);
+                if (got == (size_t)file_length) {
+                    text[got] = 0;
+                    *length = got;
+                } else {
+                    free(text);
+                    text = NULL;
+                }
+            }
+        }
+    }
+    fclose(file);
+    return text;
+}
+
+static BOOL read_sidecar_metadata(const wchar_t *path,
+                                  GoldenDocumentMetadata *metadata) {
+    size_t length = 0;
+    char *text = read_sidecar_bytes(path, &length);
+    Annotation *annotations = text ? (Annotation *)calloc(
+        MAX_ANNOTATIONS, sizeof(*annotations)) : NULL;
+    int count = MAX_ANNOTATIONS;
+    BOOL ok = annotations && golden_document_parse_utf8_with_metadata(
+        text, length, annotations, &count, metadata);
+    free(annotations);
+    free(text);
+    return ok;
+}
+
+static char *sidecar_with_scale(const wchar_t *path, double scale,
+                                size_t *output_length) {
+    size_t length = 0;
+    char *text = read_sidecar_bytes(path, &length);
+    Annotation *annotations = text ? (Annotation *)calloc(
+        MAX_ANNOTATIONS, sizeof(*annotations)) : NULL;
+    int count = MAX_ANNOTATIONS;
+    GoldenDocumentMetadata metadata = {TRUE, scale};
+    if (!annotations || !golden_document_parse_utf8(
+            text, length, annotations, &count)) {
+        free(annotations);
+        free(text);
+        return NULL;
+    }
+    free(text);
+    char *result = golden_document_serialize_utf8_with_metadata(
+        annotations, count, &metadata, output_length);
+    free(annotations);
+    return result;
+}
+
 static void load_annotations(const wchar_t *png_path) {
     g.annotation_count = 0;
+    g.document_metadata = (GoldenDocumentMetadata){0};
     g.selected = -1;
     golden_history_remove_annotations(&g.history);
     int count = MAX_ANNOTATIONS;
     GoldenNamespaceIssue issue;
-    GoldenNamespaceStatus status = golden_namespace_load_annotations(
-        png_path, g.annotations, &count, &issue);
+    GoldenNamespaceStatus status =
+        golden_namespace_load_annotations_with_metadata(
+            png_path, g.annotations, &count,
+            &g.document_metadata, &issue);
     if (status == GOLDEN_NAMESPACE_OK)
         g.annotation_count = count;
     else
@@ -719,7 +788,9 @@ static BOOL save_annotations(void) {
         return FALSE;
     }
     size_t json_length = 0;
-    char *json = golden_document_serialize_utf8(g.annotations, g.annotation_count, &json_length);
+    char *json = golden_document_serialize_utf8_with_metadata(
+        g.annotations, g.annotation_count, &g.document_metadata,
+        &json_length);
     if (!json) { show_error(L"Could not serialize the annotations."); return FALSE; }
     BOOL ok = golden_atomic_write_bytes(path, json, json_length);
     free(json);
@@ -2633,28 +2704,52 @@ static BOOL apply_resource_history(GoldenHistoryEntry *entry, BOOL undo) {
     }
 
     if (entry->kind == GOLDEN_HISTORY_RECAPTURE_PNG) {
-        wchar_t current_backup[MAX_PATH * 4];
+        wchar_t current_backup[MAX_PATH * 4], current_json[MAX_PATH * 4];
+        wchar_t json_path[MAX_PATH * 4];
         if (!make_history_temporary_path(
                 L".png", current_backup, _countof(current_backup)) ||
-            !golden_atomic_copy_file(entry->source, current_backup)) {
-            show_error(L"Goldens could not preserve the current PNG while applying recapture history.");
+            !make_history_temporary_path(
+                L".json", current_json, _countof(current_json)) ||
+            !golden_resource_json_path(
+                entry->source, json_path, _countof(json_path)) ||
+            !golden_atomic_copy_file(entry->source, current_backup) ||
+            !golden_atomic_copy_file(json_path, current_json)) {
+            DeleteFileW(current_backup);
+            DeleteFileW(current_json);
+            show_error(L"Goldens could not preserve the current PNG and sidecar while applying recapture history.");
             return FALSE;
         }
         GoldenImage replacement = {0};
-        if (!golden_png_load(g.wic, entry->destination, &replacement)) {
-            DeleteFileW(current_backup);
-            show_error(L"The stored recapture version could not be decoded.");
-            return FALSE;
-        }
-        if (!golden_atomic_copy_file(entry->destination, entry->source)) {
+        GoldenDocumentMetadata replacement_metadata = {0};
+        if (!golden_png_load(g.wic, entry->destination, &replacement) ||
+            !read_sidecar_metadata(entry->auxiliary,
+                                   &replacement_metadata)) {
             golden_image_free(&replacement);
             DeleteFileW(current_backup);
-            show_error(L"Goldens could not apply the stored recapture version; the current PNG is unchanged.");
+            DeleteFileW(current_json);
+            show_error(L"The stored recapture PNG or sidecar is invalid.");
+            return FALSE;
+        }
+        if (!golden_atomic_copy_file(entry->destination, entry->source) ||
+            !golden_atomic_copy_file(entry->auxiliary, json_path)) {
+            BOOL restored = golden_atomic_copy_file(
+                current_backup, entry->source);
+            golden_image_free(&replacement);
+            DeleteFileW(current_backup);
+            DeleteFileW(current_json);
+            show_error(restored ?
+                L"Goldens could not apply the stored recapture version; the current resource is unchanged." :
+                L"Goldens could not apply the stored recapture version or restore the current PNG.");
             return FALSE;
         }
         DeleteFileW(entry->destination);
-        if (!golden_path_copy(current_backup, entry->destination,
-                              _countof(entry->destination))) {
+        DeleteFileW(entry->auxiliary);
+        if (!golden_path_copy(
+                current_backup, entry->destination,
+                _countof(entry->destination)) ||
+            !golden_path_copy(
+                current_json, entry->auxiliary,
+                _countof(entry->auxiliary))) {
             golden_image_free(&replacement);
             return FALSE;
         }
@@ -2670,6 +2765,7 @@ static BOOL apply_resource_history(GoldenHistoryEntry *entry, BOOL undo) {
             ++g.image_revision;
             g.zoom = 0.0;
             g.pan_x = g.pan_y = 0;
+            g.document_metadata = replacement_metadata;
             remember_image_identity(g.image_path);
             update_context_label();
             update_status();
@@ -3233,6 +3329,8 @@ static const wchar_t *scene_capture_error(GoldenSceneCaptureStatus status) {
         return L"A PNG or annotation sidecar with that name already exists.";
     case GOLDEN_SCENE_CAPTURE_NO_VISIBLE_WINDOWS:
         return L"Goldens could not find a visible foreground window to capture.";
+    case GOLDEN_SCENE_CAPTURE_SCALE_FAILED:
+        return L"Windows could not report the display scale for the captured scene.";
     case GOLDEN_SCENE_CAPTURE_SCREEN_FAILED:
         return L"Windows could not capture the foreground application's visible scene.";
     case GOLDEN_SCENE_CAPTURE_SAVE_FAILED:
@@ -3335,7 +3433,8 @@ static void capture_foreground_scene(void) {
     for (int attempt = 0; attempt < 8; ++attempt) {
         if (!make_unique_copy_path(L"image.png", directory, destination,
                                    _countof(destination))) break;
-        status = golden_capture_scene(g.wic, foreground, destination, NULL);
+        status = golden_capture_scene(
+            g.wic, foreground, destination, NULL, NULL);
         if (status != GOLDEN_SCENE_CAPTURE_DESTINATION_EXISTS) break;
     }
 
@@ -3385,8 +3484,9 @@ static void recapture_foreground_scene(void) {
     g.capture_in_progress = TRUE;
     g.recapture_notice[0] = 0;
     GoldenImage captured = {0};
+    double captured_scale = 0.0;
     GoldenSceneCaptureStatus status = golden_capture_scene_image(
-        foreground, &captured, NULL);
+        foreground, &captured, NULL, &captured_scale);
     g.capture_in_progress = FALSE;
     if (status != GOLDEN_SCENE_CAPTURE_OK) {
         set_recapture_notice(scene_capture_error(status));
@@ -3408,6 +3508,7 @@ static void recapture_foreground_scene(void) {
     restore_goldens_after_capture();
     g.recapture_image = captured;
     g.recapture_comparison = comparison;
+    g.recapture_scale = captured_scale;
     g.recapture_show_annotations = TRUE;
     g.recapture_volume_serial = target_volume;
     g.recapture_file_index_high = target_high;
@@ -3481,32 +3582,59 @@ static void confirm_recapture(void) {
     wchar_t confirmation[MAX_PATH * 4 + 192];
     _snwprintf(confirmation, _countof(confirmation),
         L"Replace \"%s\" with the reviewed capture?\n\n"
-        L"Its annotation sidecar will be preserved, and the PNG replacement "
-        L"can be undone.",
+        L"Its annotations will be preserved, and the PNG and capture scale "
+        L"replacement can be undone.",
         PathFindFileNameW(g.recapture_target));
     if (MessageBoxW(g.main, confirmation, L"Confirm recapture",
                     MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON1) != IDYES)
         return;
 
-    wchar_t backup[MAX_PATH * 4];
-    if (!make_history_temporary_path(L".png", backup, _countof(backup)) ||
-        !golden_atomic_copy_file(g.recapture_target, backup)) {
+    wchar_t json_path[MAX_PATH * 4], backup[MAX_PATH * 4];
+    wchar_t backup_json[MAX_PATH * 4];
+    size_t json_length = 0;
+    if (!golden_resource_json_path(
+            g.recapture_target, json_path, _countof(json_path))) {
+        set_recapture_notice(L"the annotation sidecar path is too long");
+        return;
+    }
+    char *json = sidecar_with_scale(
+        json_path, g.recapture_scale, &json_length);
+    if (!json) {
         set_recapture_notice(
-            L"recoverable undo storage for the original PNG could not be created");
+            L"the annotation sidecar could not be updated with the capture scale");
+        return;
+    }
+    if (!make_history_temporary_path(L".png", backup, _countof(backup)) ||
+        !make_history_temporary_path(
+            L".json", backup_json, _countof(backup_json)) ||
+        !golden_atomic_copy_file(g.recapture_target, backup) ||
+        !golden_atomic_copy_file(json_path, backup_json)) {
+        free(json);
+        DeleteFileW(backup);
+        DeleteFileW(backup_json);
+        set_recapture_notice(
+            L"recoverable undo storage for the original PNG and sidecar could not be created");
         return;
     }
     if (!save_png_pixels(g.recapture_target, g.recapture_image.pixels,
                          g.recapture_image.width, g.recapture_image.height,
-                         g.recapture_image.stride)) {
+                         g.recapture_image.stride) ||
+        !golden_atomic_write_bytes(json_path, json, json_length)) {
+        BOOL restored = golden_atomic_copy_file(
+            backup, g.recapture_target);
+        free(json);
         DeleteFileW(backup);
-        set_recapture_notice(
-            L"the new PNG could not be written; the original is unchanged");
+        DeleteFileW(backup_json);
+        set_recapture_notice(restored ?
+            L"the new PNG and capture scale could not be written; the original is unchanged" :
+            L"the new resource could not be written and the original PNG could not be restored");
         return;
     }
+    free(json);
 
     GoldenHistoryEntry entry;
     golden_history_entry_resource(&entry, GOLDEN_HISTORY_RECAPTURE_PNG,
-                                  g.recapture_target, backup, NULL);
+                                  g.recapture_target, backup, backup_json);
     entry.staged = TRUE;
     golden_history_push_new(&g.history, &entry);
 
@@ -3524,6 +3652,7 @@ static void confirm_recapture(void) {
     g.recapture_notice[0] = 0;
     g.zoom = 0.0;
     g.pan_x = g.pan_y = 0;
+    g.document_metadata = (GoldenDocumentMetadata){TRUE, g.recapture_scale};
     remember_image_identity(g.image_path);
     update_context_label();
     update_status();

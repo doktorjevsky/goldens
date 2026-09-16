@@ -1,10 +1,12 @@
 #include "scene_capture.h"
 
 #include "atomic_file.h"
+#include "document.h"
 #include "image_io.h"
 #include "resource_ops.h"
 
 #include <dwmapi.h>
+#include <shellscalingapi.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -150,9 +152,21 @@ static BOOL capture_screen_rect(const RECT *bounds, GoldenImage *image) {
     return TRUE;
 }
 
+static BOOL display_scale_for_bounds(const RECT *bounds, double *scale) {
+    if (!bounds || !scale) return FALSE;
+    HMONITOR monitor = MonitorFromRect(bounds, MONITOR_DEFAULTTONEAREST);
+    UINT dpi_x = 0, dpi_y = 0;
+    if (monitor && SUCCEEDED(GetDpiForMonitor(
+            monitor, MDT_EFFECTIVE_DPI, &dpi_x, &dpi_y)) && dpi_x) {
+        *scale = (double)dpi_x / 96.0;
+        return TRUE;
+    }
+    return FALSE;
+}
+
 GoldenSceneCaptureStatus golden_capture_scene(
     IWICImagingFactory *factory, HWND foreground, const wchar_t *png_path,
-    RECT *captured_bounds) {
+    RECT *captured_bounds, double *captured_scale) {
     if (!factory || !foreground || !png_path || !png_path[0])
         return GOLDEN_SCENE_CAPTURE_INVALID_ARGUMENT;
     wchar_t json_path[MAX_PATH * 4];
@@ -164,37 +178,51 @@ GoldenSceneCaptureStatus golden_capture_scene(
         return GOLDEN_SCENE_CAPTURE_DESTINATION_EXISTS;
 
     GoldenImage image = {0};
+    double scale = 0.0;
     GoldenSceneCaptureStatus status = golden_capture_scene_image(
-        foreground, &image, captured_bounds);
+        foreground, &image, captured_bounds, &scale);
     if (status != GOLDEN_SCENE_CAPTURE_OK) return status;
 
-    static const char empty_annotations[] =
-        "{\n  \"annotations\": []\n}\n";
+    GoldenDocumentMetadata metadata = {TRUE, scale};
+    size_t json_length = 0;
+    char *json = golden_document_serialize_utf8_with_metadata(
+        NULL, 0, &metadata, &json_length);
+    if (!json) {
+        golden_image_free(&image);
+        return GOLDEN_SCENE_CAPTURE_SAVE_FAILED;
+    }
     BOOL png_saved = golden_png_save(
         factory, png_path, image.pixels, image.width, image.height,
         image.stride);
     BOOL json_saved = png_saved && golden_atomic_write_bytes(
-        json_path, empty_annotations, sizeof(empty_annotations) - 1);
+        json_path, json, json_length);
+    free(json);
     golden_image_free(&image);
     if (!png_saved || !json_saved) {
         if (png_saved) DeleteFileW(png_path);
         if (json_saved) DeleteFileW(json_path);
         return GOLDEN_SCENE_CAPTURE_SAVE_FAILED;
     }
+    if (captured_scale) *captured_scale = scale;
     return GOLDEN_SCENE_CAPTURE_OK;
 }
 
 GoldenSceneCaptureStatus golden_capture_scene_image(
-    HWND foreground, GoldenImage *image, RECT *captured_bounds) {
+    HWND foreground, GoldenImage *image, RECT *captured_bounds,
+    double *captured_scale) {
     if (!foreground || !image) return GOLDEN_SCENE_CAPTURE_INVALID_ARGUMENT;
     RECT bounds = {0};
     if (!collect_scene_bounds(foreground, &bounds))
         return GOLDEN_SCENE_CAPTURE_NO_VISIBLE_WINDOWS;
+    double scale = 0.0;
+    if (!display_scale_for_bounds(&bounds, &scale))
+        return GOLDEN_SCENE_CAPTURE_SCALE_FAILED;
     GoldenImage captured = {0};
     if (!capture_screen_rect(&bounds, &captured))
         return GOLDEN_SCENE_CAPTURE_SCREEN_FAILED;
     golden_image_free(image);
     *image = captured;
     if (captured_bounds) *captured_bounds = bounds;
+    if (captured_scale) *captured_scale = scale;
     return GOLDEN_SCENE_CAPTURE_OK;
 }

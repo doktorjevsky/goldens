@@ -3,6 +3,7 @@
 
 #include <stdio.h>
 
+#include "../src/document.h"
 #include "../src/image_io.h"
 #include "../src/resource_ops.h"
 #include "../src/scene_capture.h"
@@ -83,15 +84,17 @@ int main(void) {
     wchar_t png[MAX_PATH * 4] = L"";
     if (!failed && !temporary_resource_path(
             directory, _countof(directory), png, _countof(png))) failed = 1;
-    if (!failed && golden_capture_scene(NULL, root, png, NULL) !=
+    if (!failed && golden_capture_scene(NULL, root, png, NULL, NULL) !=
                        GOLDEN_SCENE_CAPTURE_INVALID_ARGUMENT) failed = 1;
-    if (!failed && golden_capture_scene_image(root, NULL, NULL) !=
+    if (!failed && golden_capture_scene_image(root, NULL, NULL, NULL) !=
                        GOLDEN_SCENE_CAPTURE_INVALID_ARGUMENT) failed = 1;
 
     RECT bounds = {0};
+    double captured_scale = 0.0;
     GoldenSceneCaptureStatus status = failed ?
         GOLDEN_SCENE_CAPTURE_INVALID_ARGUMENT :
-        golden_capture_scene(factory, popup, png, &bounds);
+        golden_capture_scene(
+            factory, popup, png, &bounds, &captured_scale);
     BOOL screen_capture_skipped = !failed &&
         (status == GOLDEN_SCENE_CAPTURE_NO_VISIBLE_WINDOWS ||
          status == GOLDEN_SCENE_CAPTURE_SCREEN_FAILED);
@@ -116,9 +119,26 @@ int main(void) {
             failed = 1;
         }
         golden_image_free(&image);
+        FILE *sidecar = _wfopen(json, L"rb");
+        char document[256];
+        size_t document_length = sidecar ?
+            fread(document, 1, sizeof(document), sidecar) : 0;
+        if (sidecar) fclose(sidecar);
+        Annotation annotations[1] = {0};
+        int annotation_count = 1;
+        GoldenDocumentMetadata metadata = {0};
+        if (!sidecar || !captured_scale ||
+            !golden_document_parse_utf8_with_metadata(
+                document, document_length, annotations,
+                &annotation_count, &metadata) ||
+            annotation_count != 0 || !metadata.has_scale ||
+            metadata.scale != captured_scale) {
+            fprintf(stderr, "invalid captured image scale metadata\n");
+            failed = 1;
+        }
         GoldenImage memory_capture = {0};
         GoldenSceneCaptureStatus memory_status = golden_capture_scene_image(
-            popup, &memory_capture, NULL);
+            popup, &memory_capture, NULL, NULL);
         if (!failed && (memory_status != GOLDEN_SCENE_CAPTURE_OK ||
                         memory_capture.width !=
                             (UINT)(bounds.right - bounds.left) ||
@@ -128,7 +148,7 @@ int main(void) {
             failed = 1;
         }
         golden_image_free(&memory_capture);
-        if (!failed && golden_capture_scene(factory, root, png, NULL) !=
+        if (!failed && golden_capture_scene(factory, root, png, NULL, NULL) !=
                            GOLDEN_SCENE_CAPTURE_DESTINATION_EXISTS) {
             fprintf(stderr, "existing capture destination was replaced\n");
             failed = 1;

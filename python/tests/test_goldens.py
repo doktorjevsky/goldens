@@ -8,7 +8,11 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from litewinwrap import Goldens, GoldensFormatError
+from litewinwrap import (
+    Goldens,
+    GoldensFormatError,
+    InconsistentGoldenScaleError,
+)
 
 
 class GoldensTests(unittest.TestCase):
@@ -18,6 +22,7 @@ class GoldensTests(unittest.TestCase):
         annotations: list[dict[str, object]],
         *,
         shape: tuple[int, int] = (20, 30),
+        scale: float = 1.0,
     ) -> None:
         png.parent.mkdir(parents=True, exist_ok=True)
         height, width = shape
@@ -26,7 +31,7 @@ class GoldensTests(unittest.TestCase):
         if not cv2.imwrite(str(png), image):
             raise AssertionError(f"Could not write test image: {png}")
         png.with_suffix(".json").write_text(
-            json.dumps({"annotations": annotations}),
+            json.dumps({"scale": scale, "annotations": annotations}),
             encoding="utf-8",
         )
 
@@ -62,6 +67,7 @@ class GoldensTests(unittest.TestCase):
 
             self.assertEqual(goldens.paths, (png,))
             self.assertIsNone(goldens.root)
+            self.assertEqual(goldens.scale, 1.0)
             self.assertEqual(
                 tuple(goldens),
                 ("button_0", "button_1"),
@@ -99,6 +105,7 @@ class GoldensTests(unittest.TestCase):
             goldens = Goldens.from_root(root)
 
             self.assertEqual(goldens.root, root)
+            self.assertEqual(goldens.scale, 1.0)
             self.assertEqual(goldens.paths, (calculator, login))
             self.assertEqual(
                 tuple(goldens),
@@ -126,6 +133,64 @@ class GoldensTests(unittest.TestCase):
                 "Duplicate target identifier",
             ):
                 Goldens.from_png(png)
+
+    def test_rejects_inconsistent_scales_below_root(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            boundary = {"x": 0, "y": 0, "width": 1, "height": 1}
+            first = root / "first.png"
+            second = root / "second.png"
+            self._write_resource(
+                first,
+                [{"name": "first", "boundary": boundary}],
+                scale=1.0,
+            )
+            self._write_resource(
+                second,
+                [{"name": "second", "boundary": boundary}],
+                scale=1.25,
+            )
+
+            with self.assertRaises(InconsistentGoldenScaleError) as raised:
+                Goldens.from_root(root)
+
+            self.assertEqual(raised.exception.expected_path, first)
+            self.assertEqual(raised.exception.expected_scale, 1.0)
+            self.assertEqual(raised.exception.conflicting_path, second)
+            self.assertEqual(raised.exception.conflicting_scale, 1.25)
+
+    def test_tree_requires_an_explicit_scale_for_every_resource(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            png = root / "legacy.png"
+            self._write_resource(png, [])
+            png.with_suffix(".json").write_text(
+                json.dumps({"annotations": []}),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(GoldensFormatError, "no capture scale"):
+                Goldens.from_root(root)
+
+            legacy = Goldens.from_png(png)
+            self.assertIsNone(legacy.scale)
+
+    def test_rejects_invalid_scale_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            png = Path(directory) / "invalid-scale.png"
+            self._write_resource(png, [])
+
+            for value in (None, False, 0, -1, 10**1000):
+                with self.subTest(value=value):
+                    png.with_suffix(".json").write_text(
+                        json.dumps({"scale": value, "annotations": []}),
+                        encoding="utf-8",
+                    )
+                    with self.assertRaisesRegex(
+                        GoldensFormatError,
+                        "finite positive number",
+                    ):
+                        Goldens.from_png(png)
 
     def test_rejects_nonstandard_or_ambiguous_json(self) -> None:
         invalid_documents = {

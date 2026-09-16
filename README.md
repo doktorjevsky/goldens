@@ -131,7 +131,8 @@ destination to the corresponding directory.
   state remain intact. Goldens itself can be the foreground capture target.
   The capture is stored directly in the selected resource
   directory, or in the open resource root when nothing is selected, as
-  `image.png` with an empty matching annotation sidecar; when that name is
+  `image.png` with a matching annotation sidecar that records the effective
+  display scale used for the capture; when that name is
   occupied, Goldens adds a numeric suffix. The new image is opened, selected in
   the resource tree, and its selected filename receives keyboard focus in
   inline rename mode so typing replaces it immediately.

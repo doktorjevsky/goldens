@@ -4,6 +4,7 @@
 #include <windows.h>
 #include <stddef.h>
 
+#include "document.h"
 #include "model.h"
 
 typedef enum {
@@ -25,6 +26,9 @@ typedef struct {
 GoldenNamespaceStatus golden_namespace_load_annotations(
     const wchar_t *png_path, Annotation *annotations, int *count,
     GoldenNamespaceIssue *issue);
+GoldenNamespaceStatus golden_namespace_load_annotations_with_metadata(
+    const wchar_t *png_path, Annotation *annotations, int *count,
+    GoldenDocumentMetadata *metadata, GoldenNamespaceIssue *issue);
 
 GoldenNamespaceStatus golden_namespace_validate_directory(
     const wchar_t *directory,
