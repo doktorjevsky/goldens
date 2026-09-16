@@ -91,13 +91,18 @@ static void test_document_round_trip(void) {
     source[0].click_y = 0.75;
     wcscpy(source[1].name, L"status label");
     source[1].boundary = (RECT){1, 2, 4, 6};
+    GoldenDocumentMetadata source_metadata = {TRUE, 1.25};
     size_t length = 0;
-    char *json = golden_document_serialize_utf8(source, 2, &length);
+    char *json = golden_document_serialize_utf8_with_metadata(
+        source, 2, &source_metadata, &length);
     CHECK(json != NULL && length > 0);
     Annotation parsed[MAX_ANNOTATIONS] = {0};
+    GoldenDocumentMetadata parsed_metadata = {0};
     int count = MAX_ANNOTATIONS;
-    CHECK(golden_document_parse_utf8(json, length, parsed, &count));
+    CHECK(golden_document_parse_utf8_with_metadata(
+        json, length, parsed, &count, &parsed_metadata));
     CHECK(count == 2);
+    CHECK(parsed_metadata.has_scale && parsed_metadata.scale == 1.25);
     CHECK(wcscmp(parsed[0].name, source[0].name) == 0);
     CHECK(EqualRect(&parsed[0].boundary, &source[0].boundary));
     CHECK(parsed[0].has_click && parsed[0].click_x == 0.25 && parsed[0].click_y == 0.75);
@@ -107,6 +112,14 @@ static void test_document_round_trip(void) {
     const char *invalid = "{\"annotations\":[{\"name\":\"x\",\"boundary\":{\"x\":0,\"y\":0,\"width\":0,\"height\":1}}]}";
     count = MAX_ANNOTATIONS;
     CHECK(!golden_document_parse_utf8(invalid, strlen(invalid), parsed, &count));
+
+    const char *without_scale = "{\"annotations\":[]}";
+    count = MAX_ANNOTATIONS;
+    parsed_metadata = (GoldenDocumentMetadata){TRUE, 9.0};
+    CHECK(golden_document_parse_utf8_with_metadata(
+        without_scale, strlen(without_scale), parsed, &count,
+        &parsed_metadata));
+    CHECK(!parsed_metadata.has_scale && parsed_metadata.scale == 0.0);
 }
 
 static BOOL parse_document(const char *json, Annotation *parsed, int *count) {
@@ -187,6 +200,8 @@ static void test_document_rejects_invalid_json(void) {
     check_invalid_document("{\"annotations\":[{\"name\":\"x\",\"boundary\":{\"x\":0,\"y\":0,\"width\":2147483648,\"height\":1}}]}");
     check_invalid_document("{\"annotations\":[{\"name\":\"x\",\"boundary\":{\"x\":0,\"y\":0,\"width\":1,\"height\":1},\"click\":{\"x\":nan,\"y\":0.5}}]}");
     check_invalid_document("{\"annotations\":[{\"name\":\"x\",\"boundary\":{\"x\":0,\"y\":0,\"width\":1,\"height\":1},\"click\":{\"x\":1.1,\"y\":0.5}}]}");
+    check_invalid_document("{\"scale\":0,\"annotations\":[]}");
+    check_invalid_document("{\"scale\":1,\"scale\":2,\"annotations\":[]}");
 
     const char unescaped_control[] =
         "{\"annotations\":[{\"name\":\"bad\x01name\",\"boundary\":{\"x\":0,\"y\":0,\"width\":1,\"height\":1}}]}";

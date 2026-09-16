@@ -153,7 +153,8 @@ window.close()
 ## Visual targets
 
 The native Goldens application creates a PNG and adjacent JSON sidecar. The
-sidecar stores named annotation rectangles and optional normalized click points:
+sidecar records the capture's display-scale multiplier, named annotation
+rectangles, and optional normalized click points:
 
 ```text
 login.png
@@ -180,6 +181,11 @@ submit = targets["dialogs/submit"]
 
 Both forms expose copied, read-only crops through normal mapping operations.
 PNG files without an adjacent JSON sidecar are skipped during root discovery.
+`Goldens.from_root()` requires every sidecar to declare the same positive
+capture `scale`; a mismatch raises `InconsistentGoldenScaleError`, while a
+missing or invalid scale raises `GoldensFormatError`. The shared multiplier is
+available as `targets.scale`. Loading one legacy pair with `from_png()` leaves
+`targets.scale` as `None` when its sidecar predates scale metadata.
 Annotation names must be unique across all sidecars in one folder and cannot
 contain `/` or `\\`. Identifiers differing only by case are rejected so the
 mapping remains safe on Windows filesystems. Nested folders naturally create

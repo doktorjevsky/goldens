@@ -115,9 +115,9 @@ exit /b %errorlevel%
 %CC% -std=c17 -O2 -Wall -Wextra -DUNICODE -D_UNICODE -DCOBJMACROS ^
   -D_WIN32_WINNT=0x0A00 -DWINVER=0x0A00 ^
   tests\scene_capture_tests.c src\scene_capture.c ^
-  src\image_io.c src\atomic_file.c src\resource_ops.c ^
+  src\document.c src\model.c src\image_io.c src\atomic_file.c src\resource_ops.c ^
   -o build\scene_capture_tests.exe ^
-  -ldwmapi -lgdi32 -luser32 -lole32 -luuid -lwindowscodecs
+  -ldwmapi -lshcore -lgdi32 -luser32 -lole32 -luuid -lwindowscodecs
 if errorlevel 1 exit /b 1
 build\scene_capture_tests.exe
 exit /b %errorlevel%

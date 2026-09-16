@@ -437,13 +437,16 @@ static BOOL json_parse_annotations(JsonReader *reader, Annotation *items,
     }
 }
 
-BOOL golden_document_parse_utf8(const char *text, size_t length,
-                                Annotation *items, int *count) {
+BOOL golden_document_parse_utf8_with_metadata(
+    const char *text, size_t length, Annotation *items, int *count,
+    GoldenDocumentMetadata *metadata) {
     if (!text || !items || !count || *count < 0 || *count > MAX_ANNOTATIONS)
         return FALSE;
     JsonReader reader = {text, text + length, 0};
     if (!json_consume(&reader, '{')) return FALSE;
     BOOL found_annotations = FALSE;
+    BOOL found_scale = FALSE;
+    double scale = 0.0;
     int parsed = 0;
     json_skip_space(&reader);
     if (reader.current < reader.end && *reader.current == '}') return FALSE;
@@ -455,6 +458,10 @@ BOOL golden_document_parse_utf8(const char *text, size_t length,
             if (found_annotations || !json_parse_annotations(
                     &reader, items, *count, &parsed)) return FALSE;
             found_annotations = TRUE;
+        } else if (!strcmp(key, "scale")) {
+            if (found_scale || !json_parse_double(&reader, &scale) ||
+                scale <= 0.0) return FALSE;
+            found_scale = TRUE;
         } else if (!json_skip_value(&reader)) return FALSE;
         json_skip_space(&reader);
         if (reader.current < reader.end && *reader.current == '}') {
@@ -466,7 +473,17 @@ BOOL golden_document_parse_utf8(const char *text, size_t length,
     json_skip_space(&reader);
     if (!found_annotations || reader.current != reader.end) return FALSE;
     *count = parsed;
+    if (metadata) {
+        metadata->has_scale = found_scale;
+        metadata->scale = found_scale ? scale : 0.0;
+    }
     return TRUE;
+}
+
+BOOL golden_document_parse_utf8(const char *text, size_t length,
+                                Annotation *items, int *count) {
+    return golden_document_parse_utf8_with_metadata(
+        text, length, items, count, NULL);
 }
 
 static BOOL reserve(TextBuffer *buffer, size_t extra) {
@@ -540,9 +557,13 @@ static BOOL append_name(TextBuffer *buffer, const wchar_t *name) {
     return ok;
 }
 
-char *golden_document_serialize_utf8(const Annotation *items, int count, size_t *length) {
+char *golden_document_serialize_utf8_with_metadata(
+    const Annotation *items, int count,
+    const GoldenDocumentMetadata *metadata, size_t *length) {
     if (length) *length = 0;
-    if (count < 0 || count > MAX_ANNOTATIONS || (count && !items)) return NULL;
+    if (count < 0 || count > MAX_ANNOTATIONS || (count && !items) ||
+        (metadata && metadata->has_scale &&
+         (!isfinite(metadata->scale) || metadata->scale <= 0.0))) return NULL;
     for (int i = 0; i < count; ++i) {
         const Annotation *annotation = &items[i];
         LONGLONG width = (LONGLONG)annotation->boundary.right -
@@ -559,7 +580,11 @@ char *golden_document_serialize_utf8(const Annotation *items, int count, size_t 
               annotation->click_y < 0.0 || annotation->click_y > 1.0))) return NULL;
     }
     TextBuffer buffer = {0};
-    if (!append_text(&buffer, "{\n  \"annotations\": [")) goto fail;
+    if (!append_text(&buffer, "{\n")) goto fail;
+    if (metadata && metadata->has_scale &&
+        !append_format(&buffer, "  \"scale\": %.17g,\n", metadata->scale))
+        goto fail;
+    if (!append_text(&buffer, "  \"annotations\": [")) goto fail;
     for (int i = 0; i < count; ++i) {
         const Annotation *annotation = &items[i];
         if (!append_format(&buffer, "%s\n    {\n      \"name\": \"", i ? "," : "") ||
@@ -580,4 +605,10 @@ char *golden_document_serialize_utf8(const Annotation *items, int count, size_t 
 fail:
     free(buffer.data);
     return NULL;
+}
+
+char *golden_document_serialize_utf8(const Annotation *items, int count,
+                                     size_t *length) {
+    return golden_document_serialize_utf8_with_metadata(
+        items, count, NULL, length);
 }

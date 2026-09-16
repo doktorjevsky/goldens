@@ -22,7 +22,7 @@ if errorlevel 1 exit /b 1
   -DUNICODE -D_UNICODE -DWIN32_LEAN_AND_MEAN -DCOBJMACROS -D_WIN32_WINNT=0x0A00 -DWINVER=0x0A00 ^
   -municode -mwindows src\goldens.c src\model.c src\document.c src\image_io.c src\clipboard_image.c src\scene_capture.c src\recapture_compare.c src\editor_render.c src\ui_layout.c src\ui_tooltip.c src\ui_tool_icon.c src\resource_tree.c src\resource_ops.c src\namespace.c src\atomic_file.c src\history.c src\resource_watcher.c build\goldens-res.o -o %OUTPUT% ^
   -lcomctl32 -lole32 -luuid -lwindowscodecs -lshell32 -lshlwapi ^
-  -ldwmapi -lgdi32 -lmsimg32 -luser32 -ladvapi32
+  -ldwmapi -lshcore -lgdi32 -lmsimg32 -luser32 -ladvapi32
 
 if errorlevel 1 exit /b 1
 echo Built %OUTPUT%

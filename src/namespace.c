@@ -32,9 +32,9 @@ static BOOL ends_with_png(const wchar_t *path) {
     return length >= 4 && !_wcsicmp(path + length - 4, L".png");
 }
 
-GoldenNamespaceStatus golden_namespace_load_annotations(
+GoldenNamespaceStatus golden_namespace_load_annotations_with_metadata(
     const wchar_t *png_path, Annotation *annotations, int *count,
-    GoldenNamespaceIssue *issue) {
+    GoldenDocumentMetadata *metadata, GoldenNamespaceIssue *issue) {
     clear_issue(issue);
     if (!png_path || !annotations || !count || *count < 0 ||
         *count > MAX_ANNOTATIONS)
@@ -79,7 +79,8 @@ GoldenNamespaceStatus golden_namespace_load_annotations(
             size_t got = fread(text, 1, (size_t)length, file);
             text[got] = 0;
             if (got == (size_t)length &&
-                golden_document_parse_utf8(text, got, annotations, count))
+                golden_document_parse_utf8_with_metadata(
+                    text, got, annotations, count, metadata))
                 status = GOLDEN_NAMESPACE_OK;
             free(text);
         }
@@ -89,6 +90,13 @@ GoldenNamespaceStatus golden_namespace_load_annotations(
         copy_issue_path(issue ? issue->first_png : NULL,
                         issue ? _countof(issue->first_png) : 0, png_path);
     return status;
+}
+
+GoldenNamespaceStatus golden_namespace_load_annotations(
+    const wchar_t *png_path, Annotation *annotations, int *count,
+    GoldenNamespaceIssue *issue) {
+    return golden_namespace_load_annotations_with_metadata(
+        png_path, annotations, count, NULL, issue);
 }
 
 static GoldenNamespaceStatus append_name(

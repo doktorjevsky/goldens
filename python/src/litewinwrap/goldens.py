@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator, Mapping
+from math import isfinite
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,27 @@ from .types import Target
 
 class GoldensFormatError(ValueError):
     pass
+
+
+class InconsistentGoldenScaleError(GoldensFormatError):
+    """Raised when resources in one golden tree use different scales."""
+
+    def __init__(
+        self,
+        expected_path: Path,
+        expected_scale: float,
+        conflicting_path: Path,
+        conflicting_scale: float,
+    ) -> None:
+        self.expected_path = expected_path
+        self.expected_scale = expected_scale
+        self.conflicting_path = conflicting_path
+        self.conflicting_scale = conflicting_scale
+        super().__init__(
+            "Golden tree contains inconsistent capture scales: "
+            f"{expected_path} uses {expected_scale:g}, but "
+            f"{conflicting_path} uses {conflicting_scale:g}"
+        )
 
 
 class _InvalidJsonError(ValueError):
@@ -79,6 +101,31 @@ def _load_sidecar(path: Path) -> dict[str, Any]:
     ):
         raise GoldensFormatError(f"Invalid golden sidecar: {path}")
     return document
+
+
+def _read_scale(document: dict[str, Any], path: Path) -> float | None:
+    if "scale" not in document:
+        return None
+    value = document["scale"]
+    if (
+        not isinstance(value, (int, float))
+        or isinstance(value, bool)
+        or value <= 0
+    ):
+        raise GoldensFormatError(
+            f"Golden sidecar scale must be a finite positive number: {path}"
+        )
+    try:
+        scale = float(value)
+    except OverflowError as error:
+        raise GoldensFormatError(
+            f"Golden sidecar scale must be a finite positive number: {path}"
+        ) from error
+    if not isfinite(scale):
+        raise GoldensFormatError(
+            f"Golden sidecar scale must be a finite positive number: {path}"
+        )
+    return scale
 
 
 def _integer(value: dict[str, Any], key: str, name: str) -> int:
@@ -166,13 +213,19 @@ def _read_target(
     )
 
 
-def _resource_targets(png: Path, namespace: str) -> list[Target]:
+def _resource_targets(
+    png: Path,
+    namespace: str,
+) -> tuple[list[Target], float | None]:
+    sidecar = png.with_suffix(".json")
+    document = _load_sidecar(sidecar)
+    scale = _read_scale(document, sidecar)
     image = _load_image(png)
-    document = _load_sidecar(png.with_suffix(".json"))
-    return [
+    targets = [
         _read_target(image, value, index, namespace)
         for index, value in enumerate(document["annotations"])
     ]
+    return targets, scale
 
 
 def _pngs_below(root: Path) -> list[Path]:
@@ -212,9 +265,29 @@ class Goldens(Mapping[str, Target]):
         result = cls.__new__(cls)
         targets: dict[str, Target] = {}
         identifiers: dict[str, str] = {}
+        common_scale: float | None = None
+        common_scale_path: Path | None = None
 
         for png, namespace in resources:
-            for target in _resource_targets(png, namespace):
+            resource_targets, resource_scale = _resource_targets(png, namespace)
+            if root is not None and resource_scale is None:
+                raise GoldensFormatError(
+                    f"Golden sidecar has no capture scale: {png.with_suffix('.json')}"
+                )
+            if resource_scale is not None:
+                if common_scale is None:
+                    common_scale = resource_scale
+                    common_scale_path = png
+                elif resource_scale != common_scale:
+                    assert common_scale_path is not None
+                    raise InconsistentGoldenScaleError(
+                        common_scale_path,
+                        common_scale,
+                        png,
+                        resource_scale,
+                    )
+
+            for target in resource_targets:
                 folded = target.name.casefold()
                 previous = identifiers.get(folded)
                 if previous is not None:
@@ -228,6 +301,7 @@ class Goldens(Mapping[str, Target]):
         result._targets = targets
         result._paths = tuple(png for png, _namespace in resources)
         result._root = root
+        result._scale = common_scale
         return result
 
     @classmethod
@@ -266,6 +340,12 @@ class Goldens(Mapping[str, Target]):
     @property
     def root(self) -> Path | None:
         return self._root
+
+    @property
+    def scale(self) -> float | None:
+        """Return the shared capture scale, or None for legacy single resources."""
+
+        return self._scale
 
     def __getitem__(self, name: str) -> Target:
         return self._targets[name]
